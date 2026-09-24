@@ -159,9 +159,12 @@ class LocalDecisionHead:
 
 
 class LayaBackend:
-    """Optional engine: ask the real open decision model (`pip install laya`).
+    """The open Jev-compatible decision model (`pip install laya`).
 
-    Every question is tried against laya; on any error, or when laya's
+    Prefers a local checkpoint at .models/laya/ (fetched with
+    _fetch_laya.py, no network needed at runtime); otherwise uses the
+    `laya` Router with its default Hugging Face checkpoints. Every
+    question is tried against laya; on any error, or when laya's
     confidence is below `min_confidence`, the local head's answer is used.
     """
 
@@ -171,9 +174,19 @@ class LayaBackend:
         self.min_confidence = min_confidence
         self.fallback = LocalDecisionHead()
         try:
-            from laya import Router  # type: ignore
+            local = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                ".models", "laya")
+            if os.path.isdir(local):
+                from laya import load  # type: ignore
 
-            self.router = Router(preload=True)
+                self.agent = load(local)
+                self.router = None
+            else:
+                from laya import Router  # type: ignore
+
+                self.router = Router(preload=True)
+                self.agent = None
         except Exception as exc:  # noqa: BLE001 - any import/init failure = no laya
             raise RuntimeError(
                 f"laya engine unavailable ({exc}). Install with: pip install laya"
@@ -194,18 +207,24 @@ class LayaBackend:
     def ask(self, state, questions) -> dict:
         names = [q.name for q in questions]
         laya_state = {
-            "x": state[0], "x_dot": state[1],
-            "theta": state[2], "theta_dot": state[3],
+            "x": float(state[0]), "x_dot": float(state[1]),
+            "theta": float(state[2]), "theta_dot": float(state[3]),
         }
         local = self.fallback.ask(state, questions)
+        qpayload = {
+            q.name: {"type": q.qtype, "instructions": q.instructions,
+                     **({"criteria": q.criteria} if q.criteria else {})}
+            for q in questions
+        }
         try:
-            result = self.router.predict(
-                laya_state,
-                {q.name: {"type": q.qtype, "instructions": q.instructions,
-                          **({"criteria": q.criteria} if q.criteria else {})}
-                 for q in questions},
-            )
-            raw = result.get("answers", {})
+            if self.router is not None:
+                result = self.router.predict(laya_state, qpayload)
+            else:
+                result = self.agent.predict(laya_state, qpayload)
+            if isinstance(result, dict):
+                raw = result.get("answers", {})
+            else:
+                raw = getattr(result, "answers", None) or {}
         except Exception:  # noqa: BLE001 - offline-safe: fall back entirely
             return local
         for q in questions:
