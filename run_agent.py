@@ -25,8 +25,11 @@ from jev_agent import DEFAULT_QUESTIONS, make_engine
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--episodes", type=int, default=3)
-    p.add_argument("--engine", choices=["local", "laya"], default="local",
-                   help="local = offline head (default); laya = pip install laya")
+    p.add_argument("--engine", choices=["local", "laya", "jev"], default="local",
+                   help="local = offline head (default); laya = open model "
+                        "(pip install laya); jev = real TypeSafe Jev on "
+                        "OpenRouter (needs OPENROUTER_API_KEY, ~70-500 ms "
+                        "per step)")
     p.add_argument("--render", action="store_true", help="open a window")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--max-steps", type=int, default=500,
@@ -38,7 +41,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    engine = make_engine(args.engine)
+    try:
+        engine = make_engine(args.engine)
+    except RuntimeError as exc:
+        raise SystemExit(f"error: {exc}")
 
     logf = None
     writer = None

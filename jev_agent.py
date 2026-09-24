@@ -9,6 +9,9 @@ Two engines:
   - LocalDecisionHead: fully offline physics-informed head. Computes shared
     features once per call (the "single forward pass") and emits calibrated
     probabilities. Zero dependencies beyond numpy.
+  - JevBackend: the real TypeSafe Jev model (typesafe/jev-1.13) via the
+    OpenRouter Decisions API. Needs OPENROUTER_API_KEY. Falls back to the
+    local head on any error, and reports which engine decided.
   - LayaBackend: uses the open-source `laya` package (pip install laya) to ask
     the same typed questions of a real Jev-compatible decision model. Falls
     back per-question to LocalDecisionHead on any error or low confidence,
@@ -17,10 +20,17 @@ Two engines:
 
 from __future__ import annotations
 
+import json
 import math
+import os
+import urllib.request
 from dataclasses import dataclass, field
 
 import numpy as np
+
+# The real Jev on OpenRouter: https://openrouter.ai/docs/guides/community/jev
+JEV_URL = "https://openrouter.ai/api/alpha/decisions"
+JEV_MODEL = "typesafe/jev-1.13"
 
 # CartPole-v1 termination limits (gymnasium defaults)
 THETA_LIMIT = 0.2095   # rad, ~12 degrees
@@ -211,7 +221,93 @@ class LayaBackend:
         return local
 
 
+class JevBackend:
+    """The real TypeSafe Jev model via the OpenRouter Decisions API.
+
+    Every step sends the cart state and the typed question set to
+    typesafe/jev-1.13 and parses the typed answers (choice/noul/score).
+    On any error the local head answers instead, so the pole never drops
+    because of a network hiccup. Noul has no separate confidence in the
+    Jev schema - the probability itself is the belief.
+    """
+
+    engine = "jev"
+
+    def __init__(self, model: str = JEV_MODEL):
+        self.model = model
+        self.fallback = LocalDecisionHead()
+        self.key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not self.key:
+            raise RuntimeError(
+                "The real Jev needs an OpenRouter API key. Create one at "
+                "https://openrouter.ai/settings/keys and set it as the "
+                "OPENROUTER_API_KEY environment variable."
+            )
+
+    def ask(self, state, questions) -> dict:
+        local = self.fallback.ask(state, questions)
+        payload = {
+            "model": self.model,
+            "state": {
+                "x_meters": round(float(state[0]), 4),
+                "x_dot_m_s": round(float(state[1]), 4),
+                "theta_radians": round(float(state[2]), 4),
+                "theta_dot_rad_s": round(float(state[3]), 4),
+                "pole_angle_degrees": round(math.degrees(float(state[2])), 2),
+            },
+            "questions": {
+                q.name: {
+                    "type": q.qtype,
+                    "instructions": q.instructions,
+                    **({"criteria": q.criteria} if q.criteria else {}),
+                }
+                for q in questions
+            },
+        }
+        req = urllib.request.Request(
+            JEV_URL,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Authorization": f"Bearer {self.key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = json.loads(resp.read().decode()).get("answers", {})
+        except Exception:  # noqa: BLE001 - offline-safe: fall back entirely
+            return local
+
+        for q in questions:
+            ans = raw.get(q.name)
+            if not isinstance(ans, dict):
+                continue
+            if q.qtype == "choice" and "choice" in ans:
+                conf = float(ans.get("confidence") or 0.0)
+                local[q.name] = Answer(
+                    q.name, "choice", ans["choice"],
+                    ans.get("probabilities") or {}, conf, "jev",
+                )
+            elif q.qtype == "noul" and "noul" in ans:
+                p = float(ans["noul"])
+                local[q.name] = Answer(
+                    q.name, "noul", round(p, 4),
+                    {"true": round(p, 4), "false": round(1.0 - p, 4)},
+                    abs(p - 0.5) * 2.0, "jev",
+                )
+            elif q.qtype == "score" and "score" in ans:
+                conf = float(ans.get("confidence") or 0.0)
+                local[q.name] = Answer(
+                    q.name, "score", round(float(ans["score"]), 3),
+                    ans.get("probabilities") or {}, conf, "jev",
+                )
+        return local
+
+
 def make_engine(name: str):
+    if name == "jev":
+        return JevBackend()
     if name == "laya":
         return LayaBackend()
     return LocalDecisionHead()
