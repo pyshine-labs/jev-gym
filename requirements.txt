@@ -1,0 +1,5 @@
+gymnasium>=0.29
+numpy>=1.24
+
+# Optional: real open decision-model backend for --engine laya
+# pip install laya
