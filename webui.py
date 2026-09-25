@@ -32,6 +32,27 @@ SESSION: "Session | None" = None
 FAMILIES = ("CartPole", "MountainCar", "Acrobot", "Pendulum",
             "LunarLander", "BipedalWalker")
 
+# Learned (PPO) policies, optional. Where a trained checkpoint exists it
+# drives the motor action; the Jev typed questions still assess every step.
+LEARNED: dict = {}
+try:
+    from stable_baselines3 import PPO as _PPO
+
+    for _eid, _paths in (
+        ("Pendulum-v1", (".models/pendulum_final/best_model",)),
+        ("LunarLander-v3", (".models/lander_final/best_model",)),
+        ("BipedalWalker-v3", (".models/walker_final/best_model",
+                              ".models/best3/best_model")),
+    ):
+        for _p in _paths:
+            try:
+                LEARNED[_eid] = _PPO.load(_p)
+                break
+            except Exception:  # noqa: BLE001 - missing checkpoint is fine
+                pass
+except ImportError:  # stable-baselines3 not installed: rule laws only
+    pass
+
 
 def canonical_state(env_id: str, obs) -> np.ndarray:
     """Map any supported observation to the agent's 4-D cart frame
@@ -68,8 +89,14 @@ def policy_mountaincar(obs) -> int:
 
 
 def policy_acrobot(obs) -> int:
-    """Pump elbow energy: torque in the direction of the elbow velocity."""
-    v2 = float(obs[5])
+    """Pump elbow energy: torque in the direction of the elbow velocity.
+
+    When the elbow stalls (|v2| tiny), pump on the shoulder velocity so the
+    chain never sits motionless at the bottom (fixes rare stall seeds).
+    """
+    v1, v2 = float(obs[4]), float(obs[5])
+    if abs(v2) < 0.05:
+        return 2 if v1 > 0 else 0
     return 2 if v2 > 0 else 0
 
 
@@ -140,6 +167,11 @@ def frame_b64(env) -> str | None:
 
 
 def choose_action(env, env_id, state, answers):
+    learned = LEARNED.get(env_id)
+    if learned is not None:
+        a, _ = learned.predict(np.asarray(state, dtype=np.float32),
+                               deterministic=True)
+        return a
     act = env.action_space
     to_right = answers["direction"].value == "right"
     obs = np.asarray(state, dtype=float).ravel()
@@ -279,6 +311,7 @@ class Session:
             "frame": frame_b64(self.env),
             "env": self.env_id,
             "engine": self.engine.engine,
+            "policy": "PPO" if self.env_id in LEARNED else "rule",
             "steps": self.steps,
             "reward": round(self.reward, 2),
             "done": done or self.terminated or self.truncated,
