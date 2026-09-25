@@ -42,7 +42,7 @@ def canonical_state(env_id: str, obs) -> np.ndarray:
     if env_id.startswith("Pendulum"):
         return np.array([0.0, 0.0, math.atan2(v[1], v[0]), v[2]])
     if env_id.startswith("Acrobot"):  # [cos1, sin1, cos2, sin2, v1, v2]
-        return np.array([0.0, 0.0, math.atan2(v[3], v[2]), v[4]])
+        return np.array([0.0, 0.0, math.atan2(v[3], v[2]), v[5]])
     if env_id.startswith("MountainCar"):  # [position, velocity]
         return np.array([v[0], v[1], 0.0, 0.0])
     if env_id.startswith("LunarLander"):  # [x, y, vx, vy, angle, vang, ...]
@@ -54,6 +54,72 @@ def discrete_action(env_id: str, n: int, to_right: bool) -> int:
     if env_id.startswith("LunarLander") and n >= 4:
         return 3 if to_right else 1        # 1 = left engine, 3 = right
     return n - 1 if to_right else 0
+
+
+# ---------------------------------------------------------------------------
+# Per-family control laws. Each solves its env's actual objective; the Jev
+# typed questions (direction / at_risk / instability) still assess every step.
+# ---------------------------------------------------------------------------
+
+def policy_mountaincar(obs) -> int:
+    """Energy pumping: push in the direction of motion (classic solver)."""
+    x, v = float(obs[0]), float(obs[1])
+    return 2 if v > 0 else 0
+
+
+def policy_acrobot(obs) -> int:
+    """Pump elbow energy: torque in the direction of the elbow velocity."""
+    v2 = float(obs[5])
+    return 2 if v2 > 0 else 0
+
+
+PENDULUM = dict(k_pump=0.1, k1=16.0, k2=4.0, th_sw=0.7, w_sw=2.0,
+                c=15.0, e_target=30.0)
+
+
+def policy_pendulum(obs, gains: dict = PENDULUM) -> float:
+    """Swing-up by pumping energy to the upright level, then PD hold.
+
+    Gym dynamics: wdot = c*sin(th) + 3*u (c=15, th measured from up,
+    th=pi hangs). E = 0.5*w^2 + c*(1+cos th) changes only via torque:
+    dE/dt = 3*u*w. Driving u ~ (E_target - E)*w pumps E toward the
+    upright-rest level 2c, then a PD law holds it there.
+    """
+    c, s, w = (float(v) for v in obs[:3])
+    th = math.atan2(s, c)
+    energy = 0.5 * w * w + gains.get("c", 15.0) * (1.0 + c)
+    if abs(th) < gains["th_sw"] and abs(w) < gains["w_sw"]:
+        u = -gains["k1"] * th - gains["k2"] * w
+    else:
+        u = gains["k_pump"] * (gains.get("e_target", 30.0) - energy) * w
+    return float(np.clip(u, -2.0, 2.0))
+
+
+LANDER = dict(kx=0.08, kvx=0.7, kvang=0.75, max_ang=0.35, db=0.12,
+              side_plus=1, kt=0.3, vmin=0.05)
+
+
+def policy_lander(obs, g: dict = LANDER) -> int:
+    """Attitude hold + fuel-conscious descent control for LunarLander.
+
+    Main engine fires when the fall speed exceeds the suicide-burn bound
+    vy < -kt*sqrt(y) (deceleration needed grows with sqrt of height),
+    floored at vmin to avoid hovering burns just above the pad.
+    """
+    x, y, vx, vy, ang, vang, leg1, leg2 = (float(v) for v in obs[:8])
+    if leg1 or leg2:                      # touched ground: cut engines
+        return 0
+    want = float(np.clip(g["kx"] * x + g["kvx"] * vx - g.get("kvang", 0.0) * vang,
+                         -g["max_ang"], g["max_ang"]))
+    err = want - ang
+    if err > g["db"]:
+        return g["side_plus"]             # rotate toward want
+    if err < -g["db"]:
+        return 1 if g["side_plus"] == 3 else 3
+    need = g["kt"] * math.sqrt(max(y, 0.05))
+    if vy < -max(need, g["vmin"]):
+        return 2                          # main engine
+    return 0
 
 
 def list_envs() -> list[str]:
@@ -76,17 +142,23 @@ def frame_b64(env) -> str | None:
 def choose_action(env, env_id, state, answers):
     act = env.action_space
     to_right = answers["direction"].value == "right"
+    obs = np.asarray(state, dtype=float).ravel()
     if isinstance(act, Discrete):
-        if np.isscalar(state):
-            return discrete_action(env_id, int(act.n), to_right)
+        if env_id.startswith("MountainCar") and obs.size == 2:
+            return policy_mountaincar(obs)
+        if env_id.startswith("Acrobot"):
+            return policy_acrobot(obs)
+        if env_id.startswith("LunarLander"):
+            return policy_lander(obs)
         if len(state) == 4 and act.n == 2:
             return int(cartpole_decide(state, answers))  # tuned law + wall guard
         return discrete_action(env_id, int(act.n), to_right)
     if isinstance(act, Box):
-        u = float(LocalDecisionHead().features(
-            canonical_state(env_id, state))["lean"])
-        u += float(LocalDecisionHead().features(
-            canonical_state(env_id, state))["align"])
+        if env_id.startswith("Pendulum"):
+            return np.array([policy_pendulum(obs)], dtype=act.dtype)
+        if env_id.startswith("MountainCar"):  # continuous: energy pumping
+            return np.array([1.0 if obs[1] > 0 else -1.0], dtype=act.dtype)
+        u = 1.0 if to_right else -1.0
         return np.clip(u, act.low, act.high).astype(act.dtype).reshape(act.shape)
     return act.sample()
 
