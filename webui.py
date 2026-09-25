@@ -278,6 +278,8 @@ class Session:
         """
         eid = self.env_id
         if self.terminated:
+            if eid.startswith("CartPole"):
+                return False, "pole fell"
             if eid.startswith("LunarLander"):
                 ok = self.reward >= 200
                 return ok, ("landed successfully" if ok else
