@@ -43,6 +43,8 @@ try:
         ("LunarLander-v3", (".models/lander_final/best_model",)),
         ("BipedalWalker-v3", (".models/walker_final/best_model",
                               ".models/best3/best_model")),
+        ("BipedalWalkerHardcore-v3", (".models/hardcore_final/best_model",
+                                      ".models/hardcore/best_model")),
     ):
         for _p in _paths:
             try:
