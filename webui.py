@@ -155,6 +155,11 @@ def list_envs() -> list[str]:
     # gymnasium 1.3 removed render_modes from EnvSpec; registry only lists
     # envs whose packages import cleanly, so family matching is enough.
     out = [eid for eid in gym.registry if eid.startswith(FAMILIES)]
+    # Hardcore stays hidden until its learned policy passes; running it
+    # untrained is a guaranteed failure.
+    out = [eid for eid in out
+           if not eid.startswith("BipedalWalkerHardcore")
+           or eid in LEARNED]
     return sorted(set(out)) or ["CartPole-v1"]
 
 
