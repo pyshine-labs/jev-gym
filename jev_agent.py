@@ -170,11 +170,12 @@ class LayaBackend:
 
     engine = "laya"
 
-    def __init__(self, min_confidence: float = 0.60):
+    def __init__(self, min_confidence: float = 0.60,
+                 model_path: str | None = None):
         self.min_confidence = min_confidence
         self.fallback = LocalDecisionHead()
         try:
-            local = os.path.join(
+            local = model_path or os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 ".models", "laya")
             if os.path.isdir(local):
@@ -324,9 +325,11 @@ class JevBackend:
         return local
 
 
-def make_engine(name: str):
+def make_engine(name: str, model_path: str | None = None,
+                min_confidence: float = 0.60):
     if name == "jev":
         return JevBackend()
     if name == "laya":
-        return LayaBackend()
+        return LayaBackend(min_confidence=min_confidence,
+                           model_path=model_path)
     return LocalDecisionHead()

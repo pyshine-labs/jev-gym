@@ -31,7 +31,16 @@ def parse_args() -> argparse.Namespace:
                         "OpenRouter (needs OPENROUTER_API_KEY, ~70-500 ms "
                         "per step)")
     p.add_argument("--render", action="store_true", help="open a window")
+    p.add_argument("--model-path", default=None,
+                   help="laya engine only: path to a local checkpoint dir "
+                        "(default .models/laya)")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--min-conf", type=float, default=0.60,
+                   help="laya engine: confidence gate for laya answers "
+                        "(lower = model decides more often; 0 = always)")
+    p.add_argument("--decimate", type=int, default=1,
+                   help="ask the engine every N-th step and hold the last "
+                        "answers in between (1 = every step)")
     p.add_argument("--max-steps", type=int, default=500,
                    help="CartPole-v1 truncates at 500 anyway")
     p.add_argument("--log", default="", help="write a CSV decision trail")
@@ -42,7 +51,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     try:
-        engine = make_engine(args.engine)
+        engine = make_engine(args.engine, model_path=args.model_path,
+                             min_confidence=args.min_conf)
     except RuntimeError as exc:
         raise SystemExit(f"error: {exc}")
 
@@ -68,9 +78,11 @@ def main() -> None:
         latency: list[float] = []
 
         while not done and steps < args.max_steps:
-            t0 = time.perf_counter()
-            answers = engine.ask(state, DEFAULT_QUESTIONS)
-            latency.append(time.perf_counter() - t0)
+            if steps % args.decimate == 0:
+                t0 = time.perf_counter()
+                answers = engine.ask(state, DEFAULT_QUESTIONS)
+                latency.append(time.perf_counter() - t0)
+            # else: hold the answers from the last ask (--decimate N)
 
             direction = answers["direction"]
             confs.append(direction.confidence)

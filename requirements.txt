@@ -3,3 +3,6 @@ numpy>=1.24
 
 # Optional: real open decision-model backend for --engine laya
 # pip install laya
+#
+# For GPU inference (~30x faster), install a CUDA torch build first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
