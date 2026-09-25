@@ -221,7 +221,10 @@ class Session:
             min_confidence=float(cfg.get("min_conf", 0.60)),
         )
         self.decimate = max(1, int(cfg.get("decimate", 1)))
-        self.max_steps = int(cfg.get("max_steps", 500))
+        self.max_steps = int(cfg.get("max_steps", 0) or 0)
+        if self.max_steps <= 0:  # default: the env's own time limit
+            self.max_steps = getattr(self.env.spec, "max_episode_steps",
+                                     None) or 1000
         self.state, _ = self.env.reset(seed=int(cfg.get("seed", 0)))
         self.steps = 0
         self.reward = 0.0
