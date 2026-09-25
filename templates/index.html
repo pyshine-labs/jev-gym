@@ -187,9 +187,13 @@ function render(snap) {
   }
   renderTrail(snap.trail || []);
   if (snap.done && running) stopRun();
-  if (snap.done) $("err").textContent =
-    "Episode finished - " + (snap.terminated ? "terminated (agent failed the task)"
-                                            : "truncated (survived the full episode)");
+  if (snap.done) {
+    const ok = snap.success;
+    const el = $("err");
+    el.style.color = ok ? "#86efac" : "#fca5a5";
+    el.textContent = "Episode finished - " + (ok ? "SUCCESS: " : "FAILED: ")
+                   + (snap.message || "");
+  }
 }
 
 async function loop(myId) {

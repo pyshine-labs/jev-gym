@@ -237,11 +237,44 @@ class Session:
             self._apply()
             return self.snapshot()
 
+    def outcome(self):
+        """(success, message) using each env's own objective.
+
+        gymnasium semantics: terminated = the env's own end condition
+        (goal OR failure), truncated = the time limit ran out. Which one
+        means success depends on the env.
+        """
+        eid = self.env_id
+        if self.terminated:
+            if eid.startswith("LunarLander"):
+                ok = self.reward >= 200
+                return ok, ("landed successfully" if ok else
+                            "on the ground, below the 200 solve score")
+            if eid.startswith("BipedalWalker"):
+                ok = self.reward >= 300
+                return ok, ("completed the course" if ok else
+                            "stopped, below the 300 solve score")
+            return True, "goal reached"
+        if eid.startswith("CartPole"):
+            return True, "survived the full episode"
+        if eid.startswith("Pendulum"):
+            ok = self.reward >= -400
+            return ok, ("held upright all episode" if ok else
+                        "time up, below the -400 target")
+        if eid.startswith("BipedalWalker"):
+            ok = self.reward >= 300
+            return ok, ("completed the course" if ok else
+                        "time up, below the 300 solve score")
+        return False, "time limit reached before the goal"
+
     def snapshot(self, done: bool = False) -> dict:
         confs = [t["conf"] for t in self.trail]
         risk = None
         if self.answers is not None:
             risk = self.answers["at_risk"].value
+        success, message = (None, None)
+        if self.terminated or self.truncated:
+            success, message = self.outcome()
         return {
             "frame": frame_b64(self.env),
             "env": self.env_id,
@@ -251,6 +284,8 @@ class Session:
             "done": done or self.terminated or self.truncated,
             "terminated": self.terminated,
             "truncated": self.truncated,
+            "success": success,
+            "message": message,
             "action": self.trail[-1] if self.trail else None,
             "trail": self.trail[-12:],
             "engines": self.engines,
