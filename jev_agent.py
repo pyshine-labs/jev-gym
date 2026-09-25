@@ -181,7 +181,15 @@ class LayaBackend:
             if os.path.isdir(local):
                 from laya import load  # type: ignore
 
-                self.agent = load(local)
+                device = None
+                try:
+                    import torch  # type: ignore
+
+                    if torch.cuda.is_available():
+                        device = "cuda"
+                except Exception:  # noqa: BLE001 - torch optional
+                    device = None
+                self.agent = load(local, device=device)
                 self.router = None
             else:
                 from laya import Router  # type: ignore

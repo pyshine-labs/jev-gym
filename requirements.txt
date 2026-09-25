@@ -1,8 +1,13 @@
 gymnasium[classic-control]>=0.29
 numpy>=1.24
+flask>=3
+pillow>=10
 
 # Optional: real open decision-model backend for --engine laya
 # pip install laya
 #
 # For GPU inference (~30x faster), install a CUDA torch build first:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# Optional Box2D envs in the WebUI (LunarLander, BipedalWalker):
+#   pip install swig "gymnasium[box2d]"

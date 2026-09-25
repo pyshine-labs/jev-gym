@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jev Agent Gym Console</title>
+<style>
+  :root { --bg:#0b1220; --panel:#111a2c; --edge:#22304d; --ink:#e2e8f0;
+          --dim:#8ea0bf; --blue:#3b82f6; --green:#22c55e; --red:#ef4444;
+          --amber:#f59e0b; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink);
+         font:14px/1.45 -apple-system,"Segoe UI",Inter,sans-serif; padding:18px; }
+  h1 { font-size:17px; letter-spacing:.3px; }
+  .sub { color:var(--dim); font-size:12px; margin-bottom:14px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .grid { display:grid; grid-template-columns: 640px 1fr; gap:14px; margin-top:14px; }
+  @media (max-width:1050px){ .grid{ grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--edge);
+           border-radius:10px; padding:12px; }
+  label { display:block; font-size:11px; color:var(--dim);
+          text-transform:uppercase; letter-spacing:.5px; margin-bottom:3px; }
+  select,input,button { background:#0d1526; color:var(--ink); border:1px solid var(--edge);
+           border-radius:7px; padding:7px 9px; font:inherit; }
+  select,input { min-width:130px; }
+  button { cursor:pointer; font-weight:600; }
+  button.primary { background:var(--blue); border-color:var(--blue); }
+  button.warn { background:#7f1d1d; border-color:#b91c1c; }
+  button.ghost { background:transparent; }
+  button:disabled { opacity:.45; cursor:default; }
+  #stage { text-align:center; }
+  #frame { width:100%; border-radius:8px; background:#000; min-height:340px;
+           object-fit:contain; }
+  .status { display:flex; gap:16px; justify-content:center; margin-top:9px;
+            font-size:12.5px; color:var(--dim); flex-wrap:wrap; }
+  .status b { color:var(--ink); }
+  .badge { padding:1px 7px; border-radius:20px; font-size:11px; font-weight:700; }
+  .badge.laya { background:#052e16; color:var(--green); border:1px solid #14532d; }
+  .badge.local { background:#172554; color:#93c5fd; border:1px solid #1e3a8a; }
+  .badge.jev { background:#422006; color:var(--amber); border:1px solid #713f12; }
+  .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
+  .qcard { border:1px solid var(--edge); border-radius:8px; padding:8px; background:#0d1526; }
+  .qname { font-size:11px; color:var(--dim); text-transform:uppercase; }
+  .qval { font-size:16px; font-weight:700; margin:2px 0; }
+  .bar { height:5px; background:#1b2740; border-radius:3px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--blue); }
+  .probs { font-size:10.5px; color:var(--dim); margin-top:4px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
+  th,td { text-align:left; padding:4px 6px; border-bottom:1px solid #16213a; }
+  th { color:var(--dim); font-weight:600; font-size:10.5px; text-transform:uppercase; }
+  .spark { width:100%; height:64px; margin-top:8px; }
+  .err { color:#fca5a5; font-size:12.5px; margin-top:8px; white-space:pre-wrap; }
+  .k { color:var(--dim); }
+  #runBtn.stop { background:var(--red); border-color:var(--red); }
+</style>
+</head>
+<body>
+<h1>Jev Agent Gym Console</h1>
+<div class="sub">A System-One decision agent (typed choice / noul / score questions) controlling any gymnasium env - every step shows the typed answer, its probabilities and which engine decided.</div>
+
+<div class="panel">
+  <div class="row">
+    <div><label>Environment</label><select id="env"></select></div>
+    <div><label>Engine</label>
+      <select id="engine">
+        <option value="local">local (offline head)</option>
+        <option value="laya">laya (open model, GPU)</option>
+        <option value="jev">jev (TypeSafe on OpenRouter)</option>
+      </select></div>
+    <div><label>Min conf</label><input id="minConf" type="number" step="0.05" min="0" max="1" value="0.60"></div>
+    <div><label>Decimate</label><input id="decimate" type="number" min="1" max="50" value="1"></div>
+    <div><label>Seed</label><input id="seed" type="number" value="0"></div>
+    <div><label>Speed (steps/s, 0 = max)</label><input id="speed" type="number" min="0" max="60" value="12"></div>
+    <button class="primary" id="runBtn">START</button>
+    <button class="ghost" id="stepBtn" disabled>Step once</button>
+  </div>
+  <div class="err" id="err"></div>
+</div>
+
+<div class="grid">
+  <div class="panel" id="stage">
+    <img id="frame" alt="environment render">
+    <div class="status">
+      <span>step <b id="stSteps">0</b></span>
+      <span>reward <b id="stReward">0</b></span>
+      <span>decision <b id="stMs">-</b></span>
+      <span>avg conf <b id="stConf">-</b></span>
+      <span>risk <b id="stRisk">-</b></span>
+      <span id="stEngines"></span>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <label>Current typed decision</label>
+      <div class="cards" id="cards"></div>
+      <canvas id="spark" class="spark" width="600" height="64"></canvas>
+      <div class="k" style="font-size:11px">confidence (blue) / risk noul (amber) over the last steps</div>
+    </div>
+    <div class="panel" style="margin-top:12px">
+      <label>Decision trail</label>
+      <table>
+        <thead><tr><th>step</th><th>direction</th><th>conf</th><th>at_risk</th><th>instability</th><th>engine</th></tr></thead>
+        <tbody id="trail"><tr><td colspan="6" class="k">press START</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let running = false, runningId = 0, lastSnap = null;
+const confHist = [], riskHist = [];
+
+fetch("/api/envs").then(r => r.json()).then(d => {
+  for (const e of d.envs) {
+    const o = document.createElement("option");
+    o.value = o.textContent = e;
+    $("env").appendChild(o);
+  }
+});
+
+function badge(engine) {
+  return `<span class="badge ${engine}">${engine}</span>`;
+}
+
+function renderCards(answers) {
+  $("cards").innerHTML = answers.map(a => {
+    const probs = Object.entries(a.probabilities || {})
+      .map(([k, v]) => `${k}:${(v * 100).toFixed(0)}%`).join("  ");
+    return `<div class="qcard">
+      <div class="qname">${a.name} <span style="float:right">${badge(a.engine)}</span></div>
+      <div class="qval">${a.value}</div>
+      <div class="bar"><i style="width:${(a.confidence * 100).toFixed(0)}%"></i></div>
+      <div class="probs">conf ${(a.confidence).toFixed(2)} ${probs}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderTrail(trail) {
+  if (!trail.length) return;
+  $("trail").innerHTML = trail.slice().reverse().map(t => {
+    const a = Object.fromEntries(t.answers.map(x => [x.name, x]));
+    const d = a.direction || {}, r = a.at_risk || {}, s = a.instability || {};
+    return `<tr><td>${t.step}</td><td>${d.value ?? "-"}</td>
+      <td>${(d.confidence ?? 0).toFixed(2)}</td><td>${r.value ?? "-"}</td>
+      <td>${s.value ?? "-"}</td><td>${badge(t.engine)}</td></tr>`;
+  }).join("");
+}
+
+function renderSpark() {
+  const c = $("spark"), g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  const plot = (arr, color) => {
+    if (arr.length < 2) return;
+    g.strokeStyle = color; g.lineWidth = 1.6; g.beginPath();
+    const n = Math.min(arr.length, 120), off = arr.length - n;
+    arr.slice(off).forEach((v, i) => {
+      const x = i / (n - 1) * (c.width - 4) + 2;
+      const y = c.height - 4 - v * (c.height - 8);
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+  };
+  plot(confHist, "#3b82f6");
+  plot(riskHist, "#f59e0b");
+}
+
+function render(snap) {
+  lastSnap = snap;
+  if (snap.frame) $("frame").src = "data:image/jpeg;base64," + snap.frame;
+  $("stSteps").textContent = snap.steps;
+  $("stReward").textContent = snap.reward;
+  $("stMs").textContent = snap.avg_ms + " ms";
+  $("stConf").textContent = snap.avg_conf;
+  $("stRisk").textContent = snap.risk ?? "-";
+  $("stEngines").innerHTML = Object.entries(snap.engines || {})
+    .map(([k, v]) => badge(k) + " " + v).join(" &nbsp; ");
+  if (snap.action) {
+    const a = Object.fromEntries(snap.action.answers.map(x => [x.name, x]));
+    renderCards(Object.values(a));
+    if (a.direction) {
+      confHist.push(a.direction.confidence || 0);
+      riskHist.push(a.at_risk ? Number(a.at_risk.value) || 0 : 0);
+      if (confHist.length > 120) { confHist.shift(); riskHist.shift(); }
+      renderSpark();
+    }
+  }
+  renderTrail(snap.trail || []);
+  if (snap.done && running) stopRun();
+  if (snap.done) $("err").textContent =
+    "Episode finished - " + (snap.terminated ? "terminated (agent failed the task)"
+                                            : "truncated (survived the full episode)");
+}
+
+async function loop(myId) {
+  while (running && myId === runningId) {
+    try {
+      const r = await fetch("/api/step", { method: "POST" });
+      const d = await r.json();
+      if (d.error) { $("err").textContent = d.error; stopRun(); return; }
+      render(d);
+      if (d.done) return;
+      const sp = Number($("speed").value) || 0;
+      if (sp > 0) await new Promise(res => setTimeout(res, 1000 / sp));
+    } catch (e) { $("err").textContent = String(e); stopRun(); return; }
+  }
+}
+
+function stopRun() {
+  running = false; runningId++;
+  const b = $("runBtn");
+  b.textContent = "START"; b.classList.remove("stop");
+  $("stepBtn").disabled = false;
+}
+
+$("runBtn").onclick = async () => {
+  $("err").textContent = "";
+  if (running) { stopRun(); return; }
+  const btn = $("runBtn");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        env: $("env").value, engine: $("engine").value,
+        min_conf: Number($("minConf").value) || 0,
+        decimate: Number($("decimate").value) || 1,
+        seed: Number($("seed").value) || 0,
+      }),
+    });
+    const d = await r.json();
+    if (d.error) { $("err").textContent = d.error; return; }
+    confHist.length = riskHist.length = 0;
+    render(d);
+    running = true; runningId++;
+    btn.textContent = "STOP"; btn.classList.add("stop");
+    $("stepBtn").disabled = true;
+    loop(runningId);
+  } finally { btn.disabled = false; }
+};
+
+$("stepBtn").onclick = async () => {
+  $("err").textContent = "";
+  const r = await fetch("/api/step", { method: "POST" });
+  const d = await r.json();
+  d.error ? $("err").textContent = d.error : render(d);
+};
+</script>
+</body>
+</html>
