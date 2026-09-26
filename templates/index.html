@@ -361,6 +361,32 @@ function drawHBars(g, x, y, w, items, sc) {
   });
 }
 
+function wrapText(g, text, x, y, maxW, lh, maxLines) {
+  const words = text.split(" ");
+  let line = "", lines = 0;
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    if (g.measureText(test).width > maxW && line) {
+      g.fillText(line, x, y + lines * lh); lines++; line = w;
+      if (lines >= maxLines) break;
+    } else line = test;
+  }
+  if (lines < maxLines && line) { g.fillText(line, x, y + lines * lh); lines++; }
+  return lines;
+}
+
+function whyText(snap, t) {
+  const a = Object.fromEntries(t.answers.map(x => [x.name, x]));
+  const d = a.direction, r = a.at_risk;
+  const dir = d ? `${d.value} (${d.confidence})` : "-";
+  const risk = r ? r.value : "-";
+  if (snap.policy === "PPO")
+    return `Selected by the learned PPO policy from the state vector. ` +
+           `Jev assessed it: direction ${dir}, at_risk ${risk}.`;
+  return `Selected by the physics law from Jev's typed answer: ` +
+         `direction ${dir}, at_risk ${risk} -> ${t.action}.`;
+}
+
 function drawFlow() {
   const c = $("flow"), g = c.getContext("2d");
   const W = c.width, H = c.height, my = H / 2;
@@ -370,7 +396,7 @@ function drawFlow() {
     { x: W / 2, title: "JEV DECISION", col: "#f59e0b" },
     { x: W - 210, title: "ACTION OUT", col: "#22c55e" },
   ];
-  const NW = 210, NH = 118, JW = 420, JH = 300;
+  const NW = 210, NH = 118, JW = 420, JH = 300, AH = 210;
   // connector lines
   g.strokeStyle = "#22304d"; g.lineWidth = 2;
   g.beginPath(); g.moveTo(nodes[0].x + NW / 2, my); g.lineTo(W / 2 - JW / 2 - 18, my); g.stroke();
@@ -395,7 +421,7 @@ function drawFlow() {
   // nodes
   const snap = lastSnap, t = snap && snap.action;
   nodes.forEach((n, i) => {
-    const w = i === 1 ? JW : NW, h = i === 1 ? JH : NH;
+    const w = i === 1 ? JW : NW, h = i === 1 ? JH : i === 2 ? AH : NH;
     const x = n.x - w / 2, y = my - h / 2;
     g.fillStyle = "#0d1526";
     g.strokeStyle = n.col; g.lineWidth = flowPulse > 0.4 && i === 1 ? 5 : i === 1 ? 3 : 1.4;
@@ -413,8 +439,14 @@ function drawFlow() {
     }
     if (i === 2) {
       const cur = t ? t.aval : null;
-      drawMatrix(g, x + 8, y + 26, NW - 16, NH - 38, cur, actionHist,
+      g.fillStyle = "#e2e8f0"; g.font = "700 15px sans-serif"; g.textAlign = "center";
+      const act = t ? t.action : "-";
+      g.fillText(act.length > 25 ? act.slice(0, 24) + "..." : act, n.x, y + 40);
+      drawMatrix(g, x + 8, y + 50, NW - 16, 74, cur, actionHist,
                  actNames(envId, Array.isArray(cur) ? cur.length : 1), 8);
+      g.fillStyle = "#8ea0bf"; g.font = "8.5px sans-serif"; g.textAlign = "left";
+      if (t && snap) wrapText(g, whyText(snap, t), x + 10, y + 140,
+                              NW - 20, 11, 5);
     }
     if (i === 1) {  // Jev I/O graph: canonical inputs in, typed answers out
       const a = t && Object.fromEntries(t.answers.map(x => [x.name, x]));
