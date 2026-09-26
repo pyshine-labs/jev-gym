@@ -307,7 +307,7 @@ function drawVBars(g, x, y, w, h, current, history, labels, maxDims, fs) {
     g.fillRect(bx, base - bh, bw, bh);
     if (stride && d % stride === 0) {
       g.save();
-      g.translate(bx + bw / 2 + lfs * 0.4, base - 2);
+      g.translate(bx + bw / 2 + lfs * 0.4, base - 8);  // gap before text starts
       g.rotate(-Math.PI / 2);
       g.fillStyle = "#e2e8f0"; g.font = `700 ${lfs}px ui-monospace,Consolas,monospace`;
       g.textAlign = "left";
