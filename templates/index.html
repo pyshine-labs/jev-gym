@@ -331,10 +331,10 @@ function drawMatrix(g, x, y, w, h, current, history, labels, maxDims) {
     g.fillStyle = meshColor(t);
     g.fillRect(cx + 1, cy + 1, cw - 2, ch - 2);
     g.fillStyle = "#e2e8f0";
-    g.font = "700 7.5px ui-monospace,Consolas,monospace";
+    g.font = "700 8.5px ui-monospace,Consolas,monospace";
     g.textAlign = "center";
     g.fillText((labels[d] ?? "s" + d).slice(0, 6), cx + cw / 2, cy + ch / 2 - 1);
-    g.font = "7px ui-monospace,Consolas,monospace";
+    g.font = "8px ui-monospace,Consolas,monospace";
     g.fillText((Math.round(v * 100) / 100).toString().slice(0, 7),
                cx + cw / 2, cy + ch / 2 + 7);
   }
@@ -344,20 +344,19 @@ function drawMatrix(g, x, y, w, h, current, history, labels, maxDims) {
   }
 }
 
-function drawHBars(g, x, y, w, items, sc) {
+function drawHBars(g, x, y, w, items) {
   // horizontal bars for Jev outputs: full name above, value at bar end
-  sc = sc || 1;
   items.forEach((it, j) => {
-    const by = y + j * 34;
-    g.fillStyle = "#8ea0bf"; g.font = `${8 * sc}px sans-serif`;
+    const by = y + j * 52;
+    g.fillStyle = "#8ea0bf"; g.font = "13px sans-serif";
     g.textAlign = "left";
-    g.fillText(it.label, x, by + 10);
-    g.fillStyle = "#1b2740"; g.fillRect(x, by + 14, w, 14);
+    g.fillText(it.label, x, by + 13);
+    g.fillStyle = "#1b2740"; g.fillRect(x, by + 19, w, 22);
     const t = Math.min(1, Math.max(0, it.t));
     g.fillStyle = it.color || "#f59e0b";
-    g.fillRect(x, by + 14, w * t, 14);
-    g.fillStyle = "#e2e8f0"; g.font = `${6.5 * sc}px ui-monospace,Consolas,monospace`;
-    g.fillText(it.text, x + w + 6, by + 25);
+    g.fillRect(x, by + 19, w * t, 22);
+    g.fillStyle = "#e2e8f0"; g.font = "700 11px ui-monospace,Consolas,monospace";
+    g.fillText(it.text, x + w + 8, by + 36);
   });
 }
 
@@ -396,7 +395,7 @@ function drawFlow() {
     { x: W / 2, title: "JEV DECISION", col: "#f59e0b" },
     { x: W - 210, title: "ACTION OUT", col: "#22c55e" },
   ];
-  const NW = 210, NH = 118, JW = 420, JH = 300, AH = 210;
+  const NW = 230, NH = 140, JW = 420, JH = 300, AH = 230;
   // connector lines
   g.strokeStyle = "#22304d"; g.lineWidth = 2;
   g.beginPath(); g.moveTo(nodes[0].x + NW / 2, my); g.lineTo(W / 2 - JW / 2 - 18, my); g.stroke();
@@ -429,7 +428,7 @@ function drawFlow() {
     g.beginPath(); g.roundRect(x, y, w, h, 14); g.fill(); g.stroke();
     g.shadowBlur = 0;
     g.fillStyle = n.col; g.textAlign = "center";
-    g.font = i === 1 ? "700 24px sans-serif" : "700 12px sans-serif";
+    g.font = i === 1 ? "700 24px sans-serif" : "700 13px sans-serif";
     g.fillText(n.title, n.x, y + (i === 1 ? 36 : 18));
     const envId = snap ? snap.env : "";
     if (i === 0) {
@@ -439,40 +438,33 @@ function drawFlow() {
     }
     if (i === 2) {
       const cur = t ? t.aval : null;
-      g.fillStyle = "#e2e8f0"; g.font = "700 15px sans-serif"; g.textAlign = "center";
+      g.fillStyle = "#e2e8f0"; g.font = "700 17px sans-serif"; g.textAlign = "center";
       const act = t ? t.action : "-";
-      g.fillText(act.length > 25 ? act.slice(0, 24) + "..." : act, n.x, y + 40);
-      drawMatrix(g, x + 8, y + 50, NW - 16, 74, cur, actionHist,
+      g.fillText(act.length > 25 ? act.slice(0, 24) + "..." : act, n.x, y + 42);
+      drawMatrix(g, x + 8, y + 54, NW - 16, 84, cur, actionHist,
                  actNames(envId, Array.isArray(cur) ? cur.length : 1), 8);
-      g.fillStyle = "#8ea0bf"; g.font = "8.5px sans-serif"; g.textAlign = "left";
-      if (t && snap) wrapText(g, whyText(snap, t), x + 10, y + 140,
-                              NW - 20, 11, 5);
+      g.fillStyle = "#9fb3d1"; g.font = "9.5px sans-serif"; g.textAlign = "left";
+      if (t && snap) wrapText(g, whyText(snap, t), x + 10, y + 152,
+                              NW - 20, 12.5, 5);
     }
-    if (i === 1) {  // Jev I/O graph: canonical inputs in, typed answers out
+    if (i === 1) {  // Jev typed answers out; state bars stay in the STATE node
       const a = t && Object.fromEntries(t.answers.map(x => [x.name, x]));
       const d = a && a.direction, r = a && a.at_risk, s = a && a.instability;
-      g.fillStyle = "#e2e8f0"; g.font = "700 32px sans-serif";
-      g.fillText(d ? d.value : "-", n.x, y + 84);
-      g.fillStyle = "#8ea0bf"; g.font = "700 16px sans-serif";
-      g.textAlign = "left";
-      g.fillText("in", x + 20, y + 122);
-      g.fillText("out", x + 244, y + 122);
-      drawVBars(g, x + 20, y + 132, 180, 136,
-                t && t.cstate ? t.cstate : null, cstateHist,
-                ["x", "xd", "th", "thd"], 4, 14);
-      drawHBars(g, x + 244, y + 136, 112, [
+      g.fillStyle = "#e2e8f0"; g.font = "700 44px sans-serif";
+      g.fillText(d ? d.value : "-", n.x, y + 96);
+      drawHBars(g, x + 36, y + 118, JW - 100, [
         { label: "confidence", t: d ? d.confidence || 0 : 0,
           text: (d ? d.confidence || 0 : 0).toFixed(2), color: "#f59e0b" },
         { label: "at_risk", t: r ? Number(r.value) || 0 : 0,
           text: r ? String(r.value) : "-", color: "#ef4444" },
         { label: "instability", t: s ? Math.min(1, (Number(s.value) || 0) / 5) : 0,
           text: s ? String(s.value) : "-", color: "#a78bfa" },
-      ], 2);
+      ]);
       g.textAlign = "center";
       g.fillStyle = flowEngine === "laya" ? "#22c55e"
         : flowEngine === "jev" ? "#f59e0b" : "#93c5fd";
-      g.font = "700 20px sans-serif";
-      g.fillText(flowEngine, n.x, y + JH - 18);
+      g.font = "700 22px sans-serif";
+      g.fillText(flowEngine, n.x, y + JH - 14);
     }
   });
   requestAnimationFrame(drawFlow);
