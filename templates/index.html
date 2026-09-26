@@ -116,26 +116,25 @@
       </div>
     </div>
     <div class="panel" style="margin-top:12px">
+      <label>Live pipeline - state in, Jev decision, action out</label>
+      <canvas id="flow" width="1240" height="180" style="width:100%"></canvas>
+      <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap">
+        <div style="flex:1; min-width:320px">
+          <div class="k" style="font-size:11px">state components (normalized, last 120 steps)</div>
+          <canvas id="stateChart" class="chart" width="600" height="150"></canvas>
+        </div>
+        <div style="flex:1; min-width:320px">
+          <div class="k" style="font-size:11px">action output (last 120 steps)</div>
+          <canvas id="actionChart" class="chart" width="600" height="150"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:12px">
       <label>Decision trail</label>
       <table>
         <thead><tr><th>step</th><th>direction</th><th>conf</th><th>at_risk</th><th>instability</th><th>action</th><th>engine</th></tr></thead>
         <tbody id="trail"><tr><td colspan="7" class="k">press START</td></tr></tbody>
       </table>
-    </div>
-  </div>
-</div>
-
-<div class="panel" style="margin-top:14px">
-  <label>Live pipeline - state in, Jev decision, action out</label>
-  <canvas id="flow" width="1240" height="180" style="width:100%"></canvas>
-  <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap">
-    <div style="flex:1; min-width:320px">
-      <div class="k" style="font-size:11px">state components (normalized, last 120 steps)</div>
-      <canvas id="stateChart" class="chart" width="600" height="150"></canvas>
-    </div>
-    <div style="flex:1; min-width:320px">
-      <div class="k" style="font-size:11px">action output (last 120 steps)</div>
-      <canvas id="actionChart" class="chart" width="600" height="150"></canvas>
     </div>
   </div>
 </div>
