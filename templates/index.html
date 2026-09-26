@@ -98,7 +98,7 @@
   <div>
     <div class="panel">
       <label>Live pipeline - state in, Jev decision, action out</label>
-      <canvas id="flow" width="1240" height="190" style="width:100%"></canvas>
+      <canvas id="flow" width="1240" height="380" style="width:100%"></canvas>
       <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap">
         <div style="flex:1; min-width:320px">
           <div class="k" style="font-size:11px">state components (normalized, last 120 steps)</div>
@@ -274,10 +274,11 @@ function actNames(envId, n) {
   return Array(n).fill(null).map((_, i) => "a" + i);
 }
 
-function drawVBars(g, x, y, w, h, current, history, labels, maxDims) {
+function drawVBars(g, x, y, w, h, current, history, labels, maxDims, fs) {
   // current state as vertical bars: height + color = value, label inside
+  fs = fs || 7;
   if (!current || (history && history.length < 1)) {
-    g.fillStyle = "#8ea0bf"; g.font = "11px sans-serif"; g.textAlign = "center";
+    g.fillStyle = "#8ea0bf"; g.font = `${fs + 4}px sans-serif`; g.textAlign = "center";
     g.fillText("waiting for data", x + w / 2, y + h / 2 + 4);
     return;
   }
@@ -296,9 +297,9 @@ function drawVBars(g, x, y, w, h, current, history, labels, maxDims) {
     g.fillStyle = meshColor(t);
     g.fillRect(bx, base - bh, bw, bh);
     g.save();
-    g.translate(bx + bw / 2 + 2.5, base - 2);
+    g.translate(bx + bw / 2 + fs * 0.4, base - 2);
     g.rotate(-Math.PI / 2);
-    g.fillStyle = "#e2e8f0"; g.font = "7px ui-monospace,Consolas,monospace";
+    g.fillStyle = "#e2e8f0"; g.font = `${fs}px ui-monospace,Consolas,monospace`;
     g.textAlign = "left";
     g.fillText((labels[d] ?? "s" + d).slice(0, 7), 0, 0);
     g.restore();
@@ -343,16 +344,17 @@ function drawMatrix(g, x, y, w, h, current, history, labels, maxDims) {
   }
 }
 
-function drawHBars(g, x, y, w, items) {
+function drawHBars(g, x, y, w, items, sc) {
   // horizontal bars for Jev outputs: label + filled portion
+  sc = sc || 1;
   items.forEach((it, j) => {
-    const by = y + j * 15;
-    g.fillStyle = "#8ea0bf"; g.font = "7.5px ui-monospace,Consolas,monospace";
+    const by = y + j * 30;
+    g.fillStyle = "#8ea0bf"; g.font = `${7.5 * sc}px ui-monospace,Consolas,monospace`;
     g.textAlign = "left";
-    g.fillText(it.label.slice(0, 5), x, by + 6);
-    g.fillStyle = "#1b2740"; g.fillRect(x + 28, by, w - 28, 7);
+    g.fillText(it.label.slice(0, 5), x, by + 12);
+    g.fillStyle = "#1b2740"; g.fillRect(x + 56, by, w - 56, 14);
     g.fillStyle = it.color || "#f59e0b";
-    g.fillRect(x + 28, by, (w - 28) * Math.min(1, Math.max(0, it.t)), 7);
+    g.fillRect(x + 56, by, (w - 56) * Math.min(1, Math.max(0, it.t)), 14);
   });
 }
 
@@ -365,17 +367,17 @@ function drawFlow() {
     { x: W / 2, title: "JEV DECISION", col: "#f59e0b" },
     { x: W - 210, title: "ACTION OUT", col: "#22c55e" },
   ];
-  const NW = 210, NH = 118;
+  const NW = 210, NH = 118, JW = 420, JH = 300;
   // connector lines
   g.strokeStyle = "#22304d"; g.lineWidth = 2;
-  g.beginPath(); g.moveTo(nodes[0].x + NW / 2, my); g.lineTo(nodes[1].x - NW / 2 - 18, my); g.stroke();
-  g.beginPath(); g.moveTo(nodes[1].x + NW / 2 + 18, my); g.lineTo(nodes[2].x - NW / 2, my); g.stroke();
+  g.beginPath(); g.moveTo(nodes[0].x + NW / 2, my); g.lineTo(W / 2 - JW / 2 - 18, my); g.stroke();
+  g.beginPath(); g.moveTo(W / 2 + JW / 2 + 18, my); g.lineTo(nodes[2].x - NW / 2, my); g.stroke();
   // moving pulse dots (state -> jev -> action)
   if (flowPulse > 0.03) {
     const p = 1 - flowPulse;
     const seg = (a, b) => a + (b - a) * p;
-    [[nodes[0].x + NW / 2, nodes[1].x - NW / 2 - 18],
-     [nodes[1].x + NW / 2 + 18, nodes[2].x - NW / 2]]
+    [[nodes[0].x + NW / 2, W / 2 - JW / 2 - 18],
+     [W / 2 + JW / 2 + 18, nodes[2].x - NW / 2]]
       .forEach(([a, b]) => {
         const x = seg(a, b);
         g.fillStyle = "#e2e8f0";
@@ -390,14 +392,16 @@ function drawFlow() {
   // nodes
   const snap = lastSnap, t = snap && snap.action;
   nodes.forEach((n, i) => {
-    const x = n.x - NW / 2, y = my - NH / 2;
+    const w = i === 1 ? JW : NW, h = i === 1 ? JH : NH;
+    const x = n.x - w / 2, y = my - h / 2;
     g.fillStyle = "#0d1526";
-    g.strokeStyle = n.col; g.lineWidth = flowPulse > 0.4 && i === 1 ? 2.6 : 1.4;
-    if (i === 1) { g.shadowColor = n.col; g.shadowBlur = flowPulse * 16; }
-    g.beginPath(); g.roundRect(x, y, NW, NH, 10); g.fill(); g.stroke();
+    g.strokeStyle = n.col; g.lineWidth = flowPulse > 0.4 && i === 1 ? 5 : i === 1 ? 3 : 1.4;
+    if (i === 1) { g.shadowColor = n.col; g.shadowBlur = flowPulse * 30; }
+    g.beginPath(); g.roundRect(x, y, w, h, 14); g.fill(); g.stroke();
     g.shadowBlur = 0;
-    g.fillStyle = n.col; g.font = "700 12px sans-serif"; g.textAlign = "center";
-    g.fillText(n.title, n.x, y + 18);
+    g.fillStyle = n.col; g.textAlign = "center";
+    g.font = i === 1 ? "700 24px sans-serif" : "700 12px sans-serif";
+    g.fillText(n.title, n.x, y + (i === 1 ? 36 : 18));
     const envId = snap ? snap.env : "";
     if (i === 0) {
       const cur = t ? t.state : null;
@@ -412,26 +416,26 @@ function drawFlow() {
     if (i === 1) {  // Jev I/O graph: canonical inputs in, typed answers out
       const a = t && Object.fromEntries(t.answers.map(x => [x.name, x]));
       const d = a && a.direction, r = a && a.at_risk, s = a && a.instability;
-      g.fillStyle = "#e2e8f0"; g.font = "700 13px sans-serif";
-      g.fillText(d ? d.value : "-", n.x, y + 33);
-      g.fillStyle = "#8ea0bf"; g.font = "700 7.5px sans-serif";
+      g.fillStyle = "#e2e8f0"; g.font = "700 32px sans-serif";
+      g.fillText(d ? d.value : "-", n.x, y + 84);
+      g.fillStyle = "#8ea0bf"; g.font = "700 16px sans-serif";
       g.textAlign = "left";
-      g.fillText("in", x + 8, y + 42);
-      g.fillText("out", x + 104, y + 42);
-      drawVBars(g, x + 8, y + 46, 86, 48,
+      g.fillText("in", x + 20, y + 122);
+      g.fillText("out", x + 244, y + 122);
+      drawVBars(g, x + 20, y + 132, 180, 136,
                 t && t.cstate ? t.cstate : null, cstateHist,
-                ["x", "xd", "th", "thd"], 4);
-      drawHBars(g, x + 104, y + 50, 98, [
+                ["x", "xd", "th", "thd"], 4, 14);
+      drawHBars(g, x + 244, y + 140, 170, [
         { label: "conf", t: d ? d.confidence || 0 : 0, color: "#f59e0b" },
         { label: "risk", t: r ? Number(r.value) || 0 : 0, color: "#ef4444" },
         { label: "inst", t: s ? Math.min(1, (Number(s.value) || 0) / 5) : 0,
           color: "#a78bfa" },
-      ]);
+      ], 2);
       g.textAlign = "center";
       g.fillStyle = flowEngine === "laya" ? "#22c55e"
         : flowEngine === "jev" ? "#f59e0b" : "#93c5fd";
-      g.font = "700 10px sans-serif";
-      g.fillText(flowEngine, n.x, y + NH - 6);
+      g.font = "700 20px sans-serif";
+      g.fillText(flowEngine, n.x, y + JH - 18);
     }
   });
   requestAnimationFrame(drawFlow);
