@@ -274,37 +274,37 @@ function actNames(envId, n) {
   return Array(n).fill(null).map((_, i) => "a" + i);
 }
 
-function drawBars(g, x, y, w, h, current, history, labels, maxDims) {
-  // current-step values as labeled colored bars, normalized by running range
+function drawMatrix(g, x, y, w, h, current, history, labels, maxDims) {
+  // current state vector as a 2D matrix of colored cells (label + value)
   if (!current || (history && history.length < 1)) {
     g.fillStyle = "#8ea0bf"; g.font = "11px sans-serif"; g.textAlign = "center";
     g.fillText("waiting for data", x + w / 2, y + h / 2 + 4);
     return;
   }
   const cur = Array.isArray(current) ? current : [current];
-  const shown = Math.min(maxDims, cur.length);
-  const rh = h / shown;
-  const dims = Math.max(...history.map(
-    v => Array.isArray(v) ? v.length : 1));
-  for (let d = 0; d < shown; d++) {
+  const n = Math.min(maxDims, cur.length);
+  const cols = Math.ceil(Math.sqrt(n * 1.7));
+  const rows = Math.ceil(n / cols);
+  const cw = w / cols, ch = h / rows;
+  for (let d = 0; d < n; d++) {
     const vals = history.map(v => Array.isArray(v) ? (v[d] ?? 0) : v);
     let lo = Math.min(...vals), hi = Math.max(...vals);
     if (hi - lo < 1e-6) { lo -= 0.5; hi += 0.5; }
     const v = cur[d] ?? 0, t = Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
-    const by = y + d * rh;
+    const cx = x + (d % cols) * cw, cy = y + Math.floor(d / cols) * ch;
     g.fillStyle = meshColor(t);
-    g.fillRect(x + 52, by, w - 52, Math.max(2, rh - 2));
-    g.fillStyle = "#8ea0bf"; g.font = "9px ui-monospace,Consolas,monospace";
-    g.textAlign = "left";
-    g.fillText((labels[d] ?? "s" + d).slice(0, 8), x, by + rh / 2 + 3);
-    g.fillStyle = "#e2e8f0";
-    const vs = (Math.round(v * 1000) / 1000).toString();
-    g.textAlign = "right"; g.font = "8.5px ui-monospace,Consolas,monospace";
-    g.fillText(vs, x + w - 2, by + rh / 2 + 3);
+    g.fillRect(cx + 1, cy + 1, cw - 2, ch - 2);
+    g.fillStyle = "#0b1220";
+    g.font = "700 7.5px ui-monospace,Consolas,monospace";
+    g.textAlign = "center";
+    g.fillText((labels[d] ?? "s" + d).slice(0, 6), cx + cw / 2, cy + ch / 2 - 1);
+    g.font = "7px ui-monospace,Consolas,monospace";
+    g.fillText((Math.round(v * 100) / 100).toString().slice(0, 7),
+               cx + cw / 2, cy + ch / 2 + 7);
   }
-  if (cur.length > shown) {
-    g.fillStyle = "#8ea0bf"; g.font = "9px sans-serif"; g.textAlign = "left";
-    g.fillText("+" + (cur.length - shown) + " more dims", x, y + h - 1);
+  if (cur.length > n) {
+    g.fillStyle = "#8ea0bf"; g.font = "8px sans-serif"; g.textAlign = "left";
+    g.fillText("+" + (cur.length - n) + " more", x + 2, y + h - 1);
   }
 }
 
@@ -353,13 +353,13 @@ function drawFlow() {
     const envId = snap ? snap.env : "";
     if (i === 0) {
       const cur = t ? t.state : null;
-      drawBars(g, x + 8, y + 26, NW - 16, NH - 38, cur, stateHist,
-               stateNames(envId, cur ? cur.length : 0), 8);
+      drawMatrix(g, x + 8, y + 26, NW - 16, NH - 38, cur, stateHist,
+                 stateNames(envId, cur ? cur.length : 0), 24);
     }
     if (i === 2) {
       const cur = t ? t.aval : null;
-      drawBars(g, x + 8, y + 26, NW - 16, NH - 38, cur, actionHist,
-               actNames(envId, Array.isArray(cur) ? cur.length : 1), 6);
+      drawMatrix(g, x + 8, y + 26, NW - 16, NH - 38, cur, actionHist,
+                 actNames(envId, Array.isArray(cur) ? cur.length : 1), 8);
     }
     if (i === 1) {  // typed answer + probability bars
       const d = t && Object.fromEntries(t.answers.map(a => [a.name, a])).direction;
