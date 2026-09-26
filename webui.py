@@ -390,6 +390,15 @@ def get_session() -> Session | None:
         return SESSION
 
 
+@app.after_request
+def no_cache_html(resp):
+    # templates change often during development: never let the browser
+    # serve a stale page on a plain refresh
+    if resp.content_type and resp.content_type.startswith("text/html"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.route("/")
 def index():
     return render_template("index.html")

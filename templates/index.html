@@ -241,6 +241,7 @@ function series(history, maxDims) {
 }
 
 function stripChart(canvas, history, maxDims) {
+  if (!canvas) return;
   const g = canvas.getContext("2d");
   g.clearRect(0, 0, canvas.width, canvas.height);
   g.strokeStyle = "#16213a"; g.lineWidth = 1;
@@ -480,10 +481,46 @@ function drawFlow() {
   requestAnimationFrame(drawFlow);
 }
 
+function drawReward() {
+  // cumulative episode reward: every step from START till now, labeled
+  const c = $("rewardChart");
+  if (!c) return;
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  g.strokeStyle = "#16213a"; g.lineWidth = 1;
+  g.strokeRect(1, 1, c.width - 2, c.height - 2);
+  g.fillStyle = "#8ea0bf"; g.font = "10px ui-monospace,Consolas,monospace";
+  g.textAlign = "left";
+  g.fillText("step 0", 6, 12);
+  g.textAlign = "right";
+  g.fillText("now: step " + Math.max(0, rewardHist.length - 1) +
+             "  reward " + (rewardHist.length ?
+             rewardHist[rewardHist.length - 1].toFixed(1) : "0"),
+             c.width - 6, 12);
+  if (rewardHist.length < 2) return;
+  let lo = Math.min(...rewardHist), hi = Math.max(...rewardHist);
+  if (hi - lo < 1e-6) { lo -= 0.5; hi += 0.5; }
+  const X = i => 4 + i / (rewardHist.length - 1) * (c.width - 8);
+  const Y = v => c.height - 18 - (v - lo) / (hi - lo) * (c.height - 34);
+  g.beginPath();                       // filled area under the curve
+  g.moveTo(X(0), c.height - 18);
+  rewardHist.forEach((v, i) => g.lineTo(X(i), Y(v)));
+  g.lineTo(X(rewardHist.length - 1), c.height - 18);
+  g.closePath();
+  g.fillStyle = "rgba(59,130,246,.18)"; g.fill();
+  g.beginPath();                       // the curve itself
+  rewardHist.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)));
+  g.strokeStyle = "#3b82f6"; g.lineWidth = 1.6; g.stroke();
+  g.fillStyle = "#8ea0bf"; g.font = "9.5px ui-monospace,Consolas,monospace";
+  g.textAlign = "left";
+  g.fillText("max " + hi.toFixed(1), 6, 24);
+  g.fillText("min " + lo.toFixed(1), 6, c.height - 22);
+}
+
 function renderCharts() {
   stripChart($("stateChart"), stateHist, 8);
   stripChart($("actionChart"), actionHist, 6);
-  stripChart($("rewardChart"), rewardHist, 1);
+  drawReward();
 }
 requestAnimationFrame(drawFlow);
 setInterval(renderCharts, 200);
