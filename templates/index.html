@@ -183,6 +183,8 @@ const STATE_NAMES = [
   ["Pendulum", ["cos(theta)", "sin(theta)", "omega"]],
   ["Acrobot", ["cos(t1)", "sin(t1)", "cos(t2)", "sin(t2)", "w1", "w2"]],
   ["LunarLander", ["x", "y", "vx", "vy", "angle", "vang", "leg1", "leg2"]],
+  ["BipedalWalker", ["angle", "vang", "hip1", "knee1", "hip2", "knee2",
+                     "leg1", "leg2"]],
 ];
 function stateNames(envId, n) {
   for (const [pfx, names] of STATE_NAMES)
@@ -508,6 +510,15 @@ function drawReward() {
              "  reward " + cur.toFixed(1) +
              (anch ? "  score " + (cur + anch * rewardHist.length).toFixed(1) : ""),
              c.width - 6, 12);
+  const lbl = anch ? "score (reward lifted per step)" : "cumulative reward";
+  g.font = "10px ui-monospace,Consolas,monospace";
+  const lw = 14 + g.measureText(lbl).width + 12;
+  const lx = c.width / 2 - lw / 2;
+  g.fillStyle = "rgba(13,21,38,.78)";
+  g.fillRect(lx - 4, 2, lw + 8, 16);
+  g.fillStyle = "#3b82f6"; g.fillRect(lx, 6, 10, 8);
+  g.fillStyle = "#c7d2e5"; g.textAlign = "left";
+  g.fillText(lbl, lx + 14, 14);
   if (rewardHist.length < 2) return;
   const vals = rewardHist.map((_, i) => score(i));
   let lo = Math.min(...vals), hi = Math.max(...vals);
@@ -529,9 +540,41 @@ function drawReward() {
   g.fillText((anch ? "score min " : "min ") + lo.toFixed(1), 6, c.height - 22);
 }
 
+function histDims(history, maxDims) {
+  if (!history.length) return 0;
+  return Math.min(maxDims, Math.max(...history.map(
+    v => Array.isArray(v) ? v.length : 1)));
+}
+
+function drawLegend(canvas, items) {
+  // color-swatch legend row, top-right of the chart canvas
+  if (!canvas || !items.length) return;
+  const g = canvas.getContext("2d");
+  g.font = "10px ui-monospace,Consolas,monospace";
+  const widths = items.map(it => 14 + g.measureText(it.label).width + 12);
+  const total = widths.reduce((a, b) => a + b, 0);
+  let x = Math.max(8, canvas.width - total - 8);
+  g.fillStyle = "rgba(13,21,38,.78)";
+  g.fillRect(x - 4, 2, Math.min(total + 8, canvas.width - x + 4), 16);
+  items.forEach((it, i) => {
+    g.fillStyle = it.color;
+    g.fillRect(x, 6, 10, 8);
+    g.fillStyle = "#c7d2e5"; g.textAlign = "left";
+    g.fillText(it.label, x + 14, 14);
+    x += widths[i];
+  });
+}
+
 function renderCharts() {
+  const env = lastSnap ? lastSnap.env : "";
   stripChart($("stateChart"), stateHist, 8);
+  drawLegend($("stateChart"),
+    stateNames(env, 8).slice(0, Math.max(histDims(stateHist, 8), 1))
+      .map((l, i) => ({ label: l ?? "s" + i, color: PAL[i % PAL.length] })));
   stripChart($("actionChart"), actionHist, 6);
+  drawLegend($("actionChart"),
+    actNames(env, 6).slice(0, Math.max(histDims(actionHist, 6), 1))
+      .map((l, i) => ({ label: l ?? "a" + i, color: PAL[i % PAL.length] })));
   drawReward();
 }
 requestAnimationFrame(drawFlow);
