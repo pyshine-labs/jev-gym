@@ -109,6 +109,10 @@
           <canvas id="actionChart" class="chart" width="600" height="150"></canvas>
         </div>
       </div>
+      <div style="margin-top:8px">
+        <div class="k" style="font-size:11px">episode reward - cumulative from start till now</div>
+        <canvas id="rewardChart" class="chart" width="1240" height="150"></canvas>
+      </div>
     </div>
     <div class="panel" style="margin-top:12px">
       <label>Current typed decision</label>
@@ -143,7 +147,7 @@
 const $ = id => document.getElementById(id);
 let running = false, runningId = 0, lastSnap = null;
 const confHist = [], riskHist = [];
-const stateHist = [], actionHist = [], cstateHist = [], PAL = ["#3b82f6", "#22c55e", "#f59e0b",
+const stateHist = [], actionHist = [], cstateHist = [], rewardHist = [], PAL = ["#3b82f6", "#22c55e", "#f59e0b",
   "#ef4444", "#a78bfa", "#22d3ee", "#f472b6", "#84cc16"];
 let flowPulse = 0, flowEngine = "local";
 
@@ -479,6 +483,7 @@ function drawFlow() {
 function renderCharts() {
   stripChart($("stateChart"), stateHist, 8);
   stripChart($("actionChart"), actionHist, 6);
+  stripChart($("rewardChart"), rewardHist, 1);
 }
 requestAnimationFrame(drawFlow);
 setInterval(renderCharts, 200);
@@ -509,6 +514,7 @@ function render(snap) {
     stateHist.push(snap.action.state);
     actionHist.push(snap.action.aval);
     if (snap.action.cstate) cstateHist.push(snap.action.cstate);
+    rewardHist.push(snap.reward);  // keep every step: start -> now
     if (stateHist.length > 120) {
       stateHist.shift(); actionHist.shift(); cstateHist.shift();
     }
@@ -565,6 +571,7 @@ $("runBtn").onclick = async () => {
     if (d.error) { $("err").textContent = d.error; return; }
     confHist.length = riskHist.length = 0;
     stateHist.length = actionHist.length = cstateHist.length = 0;
+    rewardHist.length = 0;
     render(d);
     running = true; runningId++;
     btn.textContent = "STOP"; btn.classList.add("stop");
