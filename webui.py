@@ -233,6 +233,14 @@ def state_list(state) -> list:
         return []
 
 
+def action_value(action):
+    """Numeric action (float or list of floats) for live charts."""
+    if action is None:
+        return None
+    arr = np.asarray(action, dtype=float).ravel()
+    return arr.tolist() if arr.size > 1 else round(float(arr[0]), 3)
+
+
 def answers_json(answers) -> list:
     out = []
     for q in DEFAULT_QUESTIONS:
@@ -293,6 +301,7 @@ class Session:
             "conf": round(float(direction.confidence), 3),
             "state": state_list(state),
             "action": action_label(self.env_id, action),
+            "aval": action_value(action),
         })
         self.trail = self.trail[-40:]
 
