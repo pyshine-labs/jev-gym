@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import math
 import os
 import threading
@@ -410,6 +411,48 @@ def index():
 @app.route("/api/envs")
 def api_envs():
     return jsonify({"envs": list_envs()})
+
+
+def _read_cfg(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:  # noqa: BLE001 - missing checkpoint is fine
+        return {}
+
+
+@app.route("/api/arch")
+def api_arch():
+    """Real layer facts for the WebUI architecture panel.
+
+    Encoder + typed-decisions head come from the laya checkpoint configs;
+    the motor layer is the PPO checkpoint (trained) or the hand law.
+    """
+    enc_cfg = _read_cfg(os.path.join(".models", "laya", "encoder",
+                                     "config.json"))
+    types = enc_cfg.get("layer_types", [])
+    encoder = {
+        "layers": enc_cfg.get("num_hidden_layers", 0),
+        "full_attn": types.count("full_attention"),
+        "sliding_attn": types.count("sliding_attention"),
+        "hidden": enc_cfg.get("hidden_size"),
+        "heads": enc_cfg.get("num_attention_heads"),
+        "intermediate": enc_cfg.get("intermediate_size"),
+        "vocab": enc_cfg.get("vocab_size"),
+        "context": enc_cfg.get("max_position_embeddings"),
+    } if enc_cfg else {}
+    head_cfg = _read_cfg(os.path.join(".models", "laya", "typed-decisions",
+                                      "encoder", "config.json"))
+    head = {"layers": head_cfg.get("num_hidden_layers", 0)} if head_cfg else {}
+    env = SESSION.env_id if SESSION else None
+    if env and env in LEARNED:
+        motor = {"type": "PPO policy (MLP)", "trained": True,
+                 "source": "learned per env - stable-baselines3 checkpoint"}
+    else:
+        motor = {"type": "physics control law", "trained": False,
+                 "source": "hand-tuned rules per env family"}
+    return jsonify({"encoder": encoder, "head": head, "motor": motor,
+                    "env": env, "engine": getattr(SESSION, "engine", None)})
 
 
 @app.route("/api/start", methods=["POST"])

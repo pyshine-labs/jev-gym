@@ -143,6 +143,11 @@
   </div>
 </div>
 
+<div class="panel" style="margin-top:12px">
+  <label>Jev model architecture - layers and task training</label>
+  <canvas id="arch" width="1240" height="300" style="width:100%"></canvas>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 let running = false, runningId = 0, lastSnap = null;
@@ -577,8 +582,93 @@ function renderCharts() {
       .map((l, i) => ({ label: l ?? "a" + i, color: PAL[i % PAL.length] })));
   drawReward();
 }
+
+let arch = null;
+function fetchArch() {
+  fetch("/api/arch").then(r => r.json()).then(d => { arch = d; })
+    .catch(() => {});
+}
+fetchArch();
+setInterval(fetchArch, 4000);
+
+function archBlock(g, x, y, w, h, title, sub, trained, badge) {
+  g.beginPath(); g.roundRect(x, y, w, h, 10);
+  g.fillStyle = trained ? "#0d2015" : "#101a2e";
+  g.strokeStyle = trained ? "#22c55e" : "#44536f";
+  g.lineWidth = 1.5; g.fill(); g.stroke();
+  g.fillStyle = "#e2e8f0"; g.font = "700 13px sans-serif"; g.textAlign = "left";
+  g.fillText(title, x + 14, y + 21);
+  if (sub) {
+    g.fillStyle = "#8ea0bf"; g.font = "11.5px sans-serif";
+    g.fillText(sub, x + 14, y + 40);
+  }
+  if (badge) {
+    g.font = "700 10px sans-serif"; g.textAlign = "right";
+    g.fillStyle = trained ? "#4ade80" : "#8ea0bf";
+    g.fillText(badge, x + w - 12, y + 20);
+    g.textAlign = "left";
+  }
+}
+
+function drawArch() {
+  const c = $("arch");
+  if (!c || !arch) return;
+  const g = c.getContext("2d");
+  const W = c.width;
+  g.clearRect(0, 0, W, c.height);
+  // legend
+  g.font = "11px sans-serif"; g.textAlign = "left";
+  g.fillStyle = "#22c55e"; g.fillRect(W - 260, 8, 10, 10);
+  g.fillStyle = "#8ea0bf"; g.fillText("task-trained", W - 244, 17);
+  g.fillStyle = "#64748b"; g.fillRect(W - 130, 8, 10, 10);
+  g.fillStyle = "#8ea0bf"; g.fillText("pre-trained / frozen", W - 114, 17);
+  const e = arch.encoder || {};
+  if (!e.layers) {
+    g.fillStyle = "#fca5a5"; g.font = "12.5px sans-serif";
+    g.fillText("laya checkpoint not found at .models/laya - architecture unavailable",
+               20, 40);
+    return;
+  }
+  // left column: the Jev decision stack
+  g.fillStyle = "#e2e8f0"; g.font = "700 13.5px sans-serif";
+  g.fillText("Jev decision stack (local laya checkpoint)", 20, 30);
+  archBlock(g, 20, 44, 620, 42,
+    "input - state [x, x_dot, theta, theta_dot] + 3 typed questions",
+    "choice: direction   -   noul: at_risk   -   score: instability",
+    false, null);
+  archBlock(g, 20, 98, 620, 60,
+    `ModernBERT encoder - ${e.layers} layers`,
+    `${e.full_attn} full-attention, ${e.sliding_attn} sliding-attention ` +
+    `(global every 3) - hidden ${e.hidden} - ${e.heads} heads - ` +
+    `MLP ${e.intermediate} - vocab ${e.vocab} - ctx ${e.context}`,
+    false, "PRE-TRAINED - FROZEN");
+  archBlock(g, 20, 170, 620, 54,
+    `typed-decisions answer head - ${arch.head.layers || e.layers}-layer ` +
+    `ModernBERT + typed decoders`,
+    "fine-tuned on typed decision data to emit the JSON answers",
+    true, "TASK-TRAINED");
+  [["direction (choice)", "at_risk (noul)", "instability (score)"]]
+    .forEach(nms => nms.forEach((nm, i) =>
+      archBlock(g, 20 + i * 212, 236, 196, 38, nm, null, true, null)));
+  // right column: the motor layer
+  g.fillStyle = "#e2e8f0"; g.font = "700 13.5px sans-serif";
+  g.fillText("motor layer - acts on the env", 680, 30);
+  const m = arch.motor || {};
+  archBlock(g, 680, 44, 540, 60, m.type || "-",
+    `${m.source || ""}${arch.env ? "   -   env: " + arch.env : ""}`,
+    !!m.trained, m.trained ? "TASK-TRAINED" : "RULE - FROZEN");
+  g.fillStyle = "#8ea0bf"; g.font = "11.5px sans-serif";
+  g.fillText("Jev assesses every step; the motor layer selects the actual env action.",
+             680, 122);
+  const eng = arch.engine;
+  const note =
+    eng === "local" ? "engine = local: the offline physics-informed head answers now (no NN forward pass)." :
+    eng === "jev" ? "engine = jev: hosted typesafe/jev-1.13 via API - layer count not exposed; stack shown is the local laya model." :
+    eng === "laya" ? "engine = laya: the stack above is loaded on GPU and answers every step." : "";
+  if (note) { g.fillStyle = "#93c5fd"; g.fillText(note, 680, 146); }
+}
+setInterval(() => { renderCharts(); drawArch(); }, 200);
 requestAnimationFrame(drawFlow);
-setInterval(renderCharts, 200);
 
 function render(snap) {
   lastSnap = snap;
