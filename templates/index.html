@@ -110,7 +110,7 @@
         </div>
       </div>
       <div style="margin-top:8px">
-        <div class="k" style="font-size:11px">episode reward - cumulative from start till now</div>
+        <div class="k" style="font-size:11px">episode reward - x from step 0 till now, curve up = doing better</div>
         <canvas id="rewardChart" class="chart" width="1240" height="150"></canvas>
       </div>
     </div>
@@ -481,40 +481,52 @@ function drawFlow() {
   requestAnimationFrame(drawFlow);
 }
 
+function anchorOf(envId) {
+  // envs whose per-step reward is a pure negative penalty: lift each step
+  // by the worst-case penalty so the curve rises when doing better
+  if (envId && envId.startsWith("Pendulum")) return 16.27;
+  if (envId && envId.startsWith("MountainCar")) return 1.0;
+  return 0;
+}
+
 function drawReward() {
-  // cumulative episode reward: every step from START till now, labeled
+  // cumulative reward from step 0 till now; curve climbs over time
   const c = $("rewardChart");
   if (!c) return;
   const g = c.getContext("2d");
   g.clearRect(0, 0, c.width, c.height);
   g.strokeStyle = "#16213a"; g.lineWidth = 1;
   g.strokeRect(1, 1, c.width - 2, c.height - 2);
+  const anch = anchorOf(lastSnap ? lastSnap.env : "");
+  const score = i => rewardHist[i] + anch * (i + 1);
+  const cur = rewardHist.length ? rewardHist[rewardHist.length - 1] : 0;
   g.fillStyle = "#8ea0bf"; g.font = "10px ui-monospace,Consolas,monospace";
   g.textAlign = "left";
   g.fillText("step 0", 6, 12);
   g.textAlign = "right";
   g.fillText("now: step " + Math.max(0, rewardHist.length - 1) +
-             "  reward " + (rewardHist.length ?
-             rewardHist[rewardHist.length - 1].toFixed(1) : "0"),
+             "  reward " + cur.toFixed(1) +
+             (anch ? "  score " + (cur + anch * rewardHist.length).toFixed(1) : ""),
              c.width - 6, 12);
   if (rewardHist.length < 2) return;
-  let lo = Math.min(...rewardHist), hi = Math.max(...rewardHist);
+  const vals = rewardHist.map((_, i) => score(i));
+  let lo = Math.min(...vals), hi = Math.max(...vals);
   if (hi - lo < 1e-6) { lo -= 0.5; hi += 0.5; }
   const X = i => 4 + i / (rewardHist.length - 1) * (c.width - 8);
   const Y = v => c.height - 18 - (v - lo) / (hi - lo) * (c.height - 34);
   g.beginPath();                       // filled area under the curve
   g.moveTo(X(0), c.height - 18);
-  rewardHist.forEach((v, i) => g.lineTo(X(i), Y(v)));
+  vals.forEach((v, i) => g.lineTo(X(i), Y(v)));
   g.lineTo(X(rewardHist.length - 1), c.height - 18);
   g.closePath();
   g.fillStyle = "rgba(59,130,246,.18)"; g.fill();
   g.beginPath();                       // the curve itself
-  rewardHist.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)));
+  vals.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)));
   g.strokeStyle = "#3b82f6"; g.lineWidth = 1.6; g.stroke();
   g.fillStyle = "#8ea0bf"; g.font = "9.5px ui-monospace,Consolas,monospace";
   g.textAlign = "left";
-  g.fillText("max " + hi.toFixed(1), 6, 24);
-  g.fillText("min " + lo.toFixed(1), 6, c.height - 22);
+  g.fillText((anch ? "score max " : "max ") + hi.toFixed(1), 6, 24);
+  g.fillText((anch ? "score min " : "min ") + lo.toFixed(1), 6, c.height - 22);
 }
 
 function renderCharts() {
