@@ -300,6 +300,7 @@ class Session:
             "engine": direction.engine,
             "conf": round(float(direction.confidence), 3),
             "state": state_list(state),
+            "cstate": state_list(canonical_state(self.env_id, state)),
             "action": action_label(self.env_id, action),
             "aval": action_value(action),
         })

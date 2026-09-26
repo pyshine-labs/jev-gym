@@ -143,7 +143,7 @@
 const $ = id => document.getElementById(id);
 let running = false, runningId = 0, lastSnap = null;
 const confHist = [], riskHist = [];
-const stateHist = [], actionHist = [], PAL = ["#3b82f6", "#22c55e", "#f59e0b",
+const stateHist = [], actionHist = [], cstateHist = [], PAL = ["#3b82f6", "#22c55e", "#f59e0b",
   "#ef4444", "#a78bfa", "#22d3ee", "#f472b6", "#84cc16"];
 let flowPulse = 0, flowEngine = "local";
 
@@ -343,6 +343,19 @@ function drawMatrix(g, x, y, w, h, current, history, labels, maxDims) {
   }
 }
 
+function drawHBars(g, x, y, w, items) {
+  // horizontal bars for Jev outputs: label + filled portion
+  items.forEach((it, j) => {
+    const by = y + j * 15;
+    g.fillStyle = "#8ea0bf"; g.font = "7.5px ui-monospace,Consolas,monospace";
+    g.textAlign = "left";
+    g.fillText(it.label.slice(0, 5), x, by + 6);
+    g.fillStyle = "#1b2740"; g.fillRect(x + 28, by, w - 28, 7);
+    g.fillStyle = it.color || "#f59e0b";
+    g.fillRect(x + 28, by, (w - 28) * Math.min(1, Math.max(0, it.t)), 7);
+  });
+}
+
 function drawFlow() {
   const c = $("flow"), g = c.getContext("2d");
   const W = c.width, H = c.height, my = H / 2;
@@ -396,22 +409,25 @@ function drawFlow() {
       drawMatrix(g, x + 8, y + 26, NW - 16, NH - 38, cur, actionHist,
                  actNames(envId, Array.isArray(cur) ? cur.length : 1), 8);
     }
-    if (i === 1) {  // typed answer + probability bars
-      const d = t && Object.fromEntries(t.answers.map(a => [a.name, a])).direction;
-      g.fillStyle = "#e2e8f0"; g.font = "700 15px sans-serif";
-      g.fillText(d ? d.value : "-", n.x, y + 48);
-      if (d) {
-        const probs = Object.entries(d.probabilities || {}).slice(0, 4);
-        probs.forEach(([k, v], j) => {
-          const bw = NW - 96, bx = x + 22, by = y + 62 + j * 13;
-          g.fillStyle = "#1b2740"; g.fillRect(bx, by, bw, 7);
-          g.fillStyle = "#f59e0b";
-          g.fillRect(bx, by, bw * Math.min(1, v), 7);
-          g.fillStyle = "#8ea0bf"; g.font = "9px sans-serif"; g.textAlign = "left";
-          g.fillText(`${k} ${(v * 100).toFixed(0)}%`, bx + bw + 4, by + 6.5);
-          g.textAlign = "center";
-        });
-      }
+    if (i === 1) {  // Jev I/O graph: canonical inputs in, typed answers out
+      const a = t && Object.fromEntries(t.answers.map(x => [x.name, x]));
+      const d = a && a.direction, r = a && a.at_risk, s = a && a.instability;
+      g.fillStyle = "#e2e8f0"; g.font = "700 13px sans-serif";
+      g.fillText(d ? d.value : "-", n.x, y + 33);
+      g.fillStyle = "#8ea0bf"; g.font = "700 7.5px sans-serif";
+      g.textAlign = "left";
+      g.fillText("in", x + 8, y + 42);
+      g.fillText("out", x + 104, y + 42);
+      drawVBars(g, x + 8, y + 46, 86, 48,
+                t && t.cstate ? t.cstate : null, cstateHist,
+                ["x", "xd", "th", "thd"], 4);
+      drawHBars(g, x + 104, y + 50, 98, [
+        { label: "conf", t: d ? d.confidence || 0 : 0, color: "#f59e0b" },
+        { label: "risk", t: r ? Number(r.value) || 0 : 0, color: "#ef4444" },
+        { label: "inst", t: s ? Math.min(1, (Number(s.value) || 0) / 5) : 0,
+          color: "#a78bfa" },
+      ]);
+      g.textAlign = "center";
       g.fillStyle = flowEngine === "laya" ? "#22c55e"
         : flowEngine === "jev" ? "#f59e0b" : "#93c5fd";
       g.font = "700 10px sans-serif";
@@ -453,7 +469,10 @@ function render(snap) {
   if (snap.action && snap.action.aval != null) {
     stateHist.push(snap.action.state);
     actionHist.push(snap.action.aval);
-    if (stateHist.length > 120) { stateHist.shift(); actionHist.shift(); }
+    if (snap.action.cstate) cstateHist.push(snap.action.cstate);
+    if (stateHist.length > 120) {
+      stateHist.shift(); actionHist.shift(); cstateHist.shift();
+    }
     flowPulse = 1; flowEngine = snap.action.engine;
   }
   if (snap.done && running) stopRun();
@@ -506,7 +525,7 @@ $("runBtn").onclick = async () => {
     const d = await r.json();
     if (d.error) { $("err").textContent = d.error; return; }
     confHist.length = riskHist.length = 0;
-    stateHist.length = actionHist.length = 0;
+    stateHist.length = actionHist.length = cstateHist.length = 0;
     render(d);
     running = true; runningId++;
     btn.textContent = "STOP"; btn.classList.add("stop");
