@@ -179,7 +179,8 @@ def choose_action(env, env_id, state, answers):
     if learned is not None:
         a, _ = learned.predict(np.asarray(state, dtype=np.float32),
                                deterministic=True)
-        return a
+        a = np.asarray(a)
+        return int(a.item()) if a.ndim == 0 else a
     act = env.action_space
     to_right = answers["direction"].value == "right"
     obs = np.asarray(state, dtype=float).ravel()
@@ -201,6 +202,35 @@ def choose_action(env, env_id, state, answers):
         u = 1.0 if to_right else -1.0
         return np.clip(u, act.low, act.high).astype(act.dtype).reshape(act.shape)
     return act.sample()
+
+
+def action_label(env_id: str, action) -> str:
+    """Human-readable action for the UI."""
+    if action is None:
+        return "-"
+    if isinstance(action, (int, np.integer)):
+        n = int(action)
+        if env_id.startswith("CartPole"):
+            return ["push LEFT", "push RIGHT"][n] if 0 <= n <= 1 else str(n)
+        if env_id.startswith("MountainCar") and "Continuous" not in env_id:
+            return ["push left", "no push", "push right"][n] if 0 <= n <= 2 else str(n)
+        if env_id.startswith("Acrobot"):
+            return ["hold", "hip torque -1", "hip torque +1",
+                    "knee torque -1", "knee torque +1"][n] if 0 <= n <= 4 else str(n)
+        if env_id.startswith("LunarLander"):
+            return ["no fire", "left engine", "main engine", "right engine"][n] \
+                if 0 <= n <= 3 else str(n)
+        return str(n)
+    vals = [round(float(v), 3) for v in np.asarray(action).ravel()]
+    return "[" + ", ".join(map(str, vals)) + "]"
+
+
+def state_list(state) -> list:
+    """Rounded observation vector for the UI."""
+    try:
+        return [round(float(v), 3) for v in np.asarray(state).ravel()]
+    except Exception:  # noqa: BLE001 - never let display kill the loop
+        return []
 
 
 def answers_json(answers) -> list:
@@ -244,7 +274,7 @@ class Session:
         self.trail: list[dict] = []
 
         self._ask()
-        self._apply()
+        self._apply(state=self.state)
 
     def _ask(self) -> None:
         if self.answers is None or self.steps % self.decimate == 0:
@@ -253,7 +283,7 @@ class Session:
                 canonical_state(self.env_id, self.state), DEFAULT_QUESTIONS)
             self.latencies.append(time.perf_counter() - t0)
 
-    def _apply(self) -> None:
+    def _apply(self, action=None, state=None) -> None:
         direction = self.answers["direction"]
         self.engines[direction.engine] = self.engines.get(direction.engine, 0) + 1
         self.trail.append({
@@ -261,6 +291,8 @@ class Session:
             "answers": answers_json(self.answers),
             "engine": direction.engine,
             "conf": round(float(direction.confidence), 3),
+            "state": state_list(state),
+            "action": action_label(self.env_id, action),
         })
         self.trail = self.trail[-40:]
 
@@ -269,6 +301,7 @@ class Session:
             if self.terminated or self.truncated or self.steps >= self.max_steps:
                 return self.snapshot(done=True)
             self._ask()
+            pre_state = self.state
             action = choose_action(self.env, self.env_id, self.state,
                                    self.answers)
             state, reward, term, trunc, _ = self.env.step(action)
@@ -277,7 +310,7 @@ class Session:
             self.steps += 1
             self.terminated = bool(term)
             self.truncated = bool(trunc)
-            self._apply()
+            self._apply(action, pre_state)
             return self.snapshot()
 
     def outcome(self):

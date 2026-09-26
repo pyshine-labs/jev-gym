@@ -44,6 +44,11 @@
   .bar { height:5px; background:#1b2740; border-radius:3px; overflow:hidden; }
   .bar > i { display:block; height:100%; background:var(--blue); }
   .probs { font-size:10.5px; color:var(--dim); margin-top:4px; }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+  .chip { background:#0d1526; border:1px solid var(--edge); border-radius:6px;
+          padding:2px 6px; font-size:11px; font-family:ui-monospace,Consolas,monospace; }
+  .chip b { color:var(--dim); font-weight:600; margin-right:3px; font-family:inherit; }
+  .chip.hi { border-color:var(--amber); }
   table { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
   th,td { text-align:left; padding:4px 6px; border-bottom:1px solid #16213a; }
   th { color:var(--dim); font-weight:600; font-size:10.5px; text-transform:uppercase; }
@@ -97,10 +102,23 @@
       <div class="k" style="font-size:11px">confidence (blue) / risk noul (amber) over the last steps</div>
     </div>
     <div class="panel" style="margin-top:12px">
+      <label>Step I/O - inputs, Jev output, action taken</label>
+      <div style="margin-top:6px">
+        <div class="k" style="font-size:11px">state inputs</div>
+        <div id="stateChips" class="chips"><span class="k" style="font-size:12px">press START</span></div>
+      </div>
+      <div style="display:flex; gap:18px; margin-top:8px; flex-wrap:wrap">
+        <div><div class="k" style="font-size:11px">action taken</div>
+             <div id="actionOut" style="font-size:15px; font-weight:700">-</div></div>
+        <div><div class="k" style="font-size:11px">Jev direction answer</div>
+             <div id="jevOut" style="font-size:15px; font-weight:700">-</div></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:12px">
       <label>Decision trail</label>
       <table>
-        <thead><tr><th>step</th><th>direction</th><th>conf</th><th>at_risk</th><th>instability</th><th>engine</th></tr></thead>
-        <tbody id="trail"><tr><td colspan="6" class="k">press START</td></tr></tbody>
+        <thead><tr><th>step</th><th>direction</th><th>conf</th><th>at_risk</th><th>instability</th><th>action</th><th>engine</th></tr></thead>
+        <tbody id="trail"><tr><td colspan="7" class="k">press START</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -136,6 +154,33 @@ function renderCards(answers) {
   }).join("");
 }
 
+const STATE_NAMES = [
+  ["CartPole", ["x", "x_dot", "theta", "theta_dot"]],
+  ["MountainCarContinuous", ["position", "velocity"]],
+  ["MountainCar", ["position", "velocity"]],
+  ["Pendulum", ["cos(theta)", "sin(theta)", "omega"]],
+  ["Acrobot", ["cos(t1)", "sin(t1)", "cos(t2)", "sin(t2)", "w1", "w2"]],
+  ["LunarLander", ["x", "y", "vx", "vy", "angle", "vang", "leg1", "leg2"]],
+];
+function stateNames(envId, n) {
+  for (const [pfx, names] of STATE_NAMES)
+    if (envId.startsWith(pfx)) return names.slice(0, n)
+      .concat(Array(Math.max(0, n - names.length)).fill(null)
+        .map((_, i) => "s" + (names.length + i)));
+  return Array(n).fill(null).map((_, i) => "s" + i);
+}
+
+function renderStepIO(snap) {
+  const t = snap.action;  // last trail entry: decision inputs + outcome
+  if (!t) return;
+  const names = stateNames(snap.env, t.state ? t.state.length : 0);
+  $("stateChips").innerHTML = t.state.map((v, i) =>
+    `<span class="chip"><b>${names[i]}</b>${v}</span>`).join("");
+  $("actionOut").textContent = t.action;
+  const d = Object.fromEntries(t.answers.map(x => [x.name, x])).direction;
+  $("jevOut").textContent = d ? `${d.value} (conf ${d.confidence}, ${d.engine})` : "-";
+}
+
 function renderTrail(trail) {
   if (!trail.length) return;
   $("trail").innerHTML = trail.slice().reverse().map(t => {
@@ -143,7 +188,7 @@ function renderTrail(trail) {
     const d = a.direction || {}, r = a.at_risk || {}, s = a.instability || {};
     return `<tr><td>${t.step}</td><td>${d.value ?? "-"}</td>
       <td>${(d.confidence ?? 0).toFixed(2)}</td><td>${r.value ?? "-"}</td>
-      <td>${s.value ?? "-"}</td><td>${badge(t.engine)}</td></tr>`;
+      <td>${s.value ?? "-"}</td><td>${t.action ?? "-"}</td><td>${badge(t.engine)}</td></tr>`;
   }).join("");
 }
 
@@ -186,6 +231,7 @@ function render(snap) {
     }
   }
   renderTrail(snap.trail || []);
+  renderStepIO(snap);
   if (snap.done && running) stopRun();
   if (snap.done) {
     const ok = snap.success;
