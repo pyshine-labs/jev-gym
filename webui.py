@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import io
 import math
+import os
 import threading
 import time
 
@@ -43,8 +44,7 @@ try:
         ("LunarLander-v3", (".models/lander_final/best_model",)),
         ("BipedalWalker-v3", (".models/walker_final/best_model",
                               ".models/best3/best_model")),
-        ("BipedalWalkerHardcore-v3", (".models/hardcore_final/best_model",
-                                      ".models/hardcore/best_model")),
+        ("BipedalWalkerHardcore-v3", (".models/hardcore_final/best_model",)),
     ):
         for _p in _paths:
             try:
@@ -156,10 +156,11 @@ def list_envs() -> list[str]:
     # envs whose packages import cleanly, so family matching is enough.
     out = [eid for eid in gym.registry if eid.startswith(FAMILIES)]
     # Hardcore stays hidden until its learned policy passes; running it
-    # untrained is a guaranteed failure.
+    # untrained is a guaranteed failure. hardcore_final is only created
+    # after a checkpoint passes the 300-seed sweep.
+    hardcore_ready = os.path.isfile(".models/hardcore_final/best_model.zip")
     out = [eid for eid in out
-           if not eid.startswith("BipedalWalkerHardcore")
-           or eid in LEARNED]
+           if not eid.startswith("BipedalWalkerHardcore") or hardcore_ready]
     return sorted(set(out)) or ["CartPole-v1"]
 
 
