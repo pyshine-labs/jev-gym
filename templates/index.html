@@ -97,6 +97,20 @@
 
   <div>
     <div class="panel">
+      <label>Live pipeline - state in, Jev decision, action out</label>
+      <canvas id="flow" width="1240" height="190" style="width:100%"></canvas>
+      <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap">
+        <div style="flex:1; min-width:320px">
+          <div class="k" style="font-size:11px">state components (normalized, last 120 steps)</div>
+          <canvas id="stateChart" class="chart" width="600" height="150"></canvas>
+        </div>
+        <div style="flex:1; min-width:320px">
+          <div class="k" style="font-size:11px">action output (last 120 steps)</div>
+          <canvas id="actionChart" class="chart" width="600" height="150"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:12px">
       <label>Current typed decision</label>
       <div class="cards" id="cards"></div>
       <canvas id="spark" class="spark" width="600" height="64"></canvas>
@@ -113,20 +127,6 @@
              <div id="actionOut" style="font-size:15px; font-weight:700">-</div></div>
         <div><div class="k" style="font-size:11px">Jev direction answer</div>
              <div id="jevOut" style="font-size:15px; font-weight:700">-</div></div>
-      </div>
-    </div>
-    <div class="panel" style="margin-top:12px">
-      <label>Live pipeline - state in, Jev decision, action out</label>
-      <canvas id="flow" width="1240" height="180" style="width:100%"></canvas>
-      <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap">
-        <div style="flex:1; min-width:320px">
-          <div class="k" style="font-size:11px">state components (normalized, last 120 steps)</div>
-          <canvas id="stateChart" class="chart" width="600" height="150"></canvas>
-        </div>
-        <div style="flex:1; min-width:320px">
-          <div class="k" style="font-size:11px">action output (last 120 steps)</div>
-          <canvas id="actionChart" class="chart" width="600" height="150"></canvas>
-        </div>
       </div>
     </div>
     <div class="panel" style="margin-top:12px">
@@ -255,24 +255,56 @@ function stripChart(canvas, history, maxDims) {
   });
 }
 
+function meshColor(v) {  // v in [0,1]: deep blue -> blue -> amber
+  const lo = [30, 58, 138], mid = [37, 99, 235], hi = [245, 158, 11];
+  const a = v < 0.5 ? lo : mid, b = v < 0.5 ? mid : hi;
+  const t = v < 0.5 ? v * 2 : (v - 0.5) * 2;
+  const c = a.map((x, i) => Math.round(x + (b[i] - x) * t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function drawMesh(g, x, y, w, h, history, maxDims, maxCols) {
+  const rows = history.slice(-maxCols);
+  if (rows.length < 2) {
+    g.fillStyle = "#8ea0bf"; g.font = "11px sans-serif"; g.textAlign = "center";
+    g.fillText("waiting for data", x + w / 2, y + h / 2 + 4);
+    return;
+  }
+  const dims = Math.min(maxDims, Math.max(...rows.map(
+    v => Array.isArray(v) ? v.length : 1)));
+  const cw = w / rows.length, ch = h / dims;
+  for (let d = 0; d < dims; d++) {
+    const vals = rows.map(v => Array.isArray(v) ? (v[d] ?? 0) : v);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi - lo < 1e-6) { lo -= 0.5; hi += 0.5; }
+    vals.forEach((v, i) => {
+      g.fillStyle = meshColor((v - lo) / (hi - lo));
+      g.fillRect(x + i * cw, y + d * ch,
+                 Math.max(1, cw - 1), Math.max(1, ch - 1));
+    });
+  }
+}
+
 function drawFlow() {
   const c = $("flow"), g = c.getContext("2d");
   const W = c.width, H = c.height, my = H / 2;
   g.clearRect(0, 0, W, H);
   const nodes = [
-    { x: 180, title: "STATE INPUTS", col: "#3b82f6" },
+    { x: 210, title: "STATE INPUTS", col: "#3b82f6" },
     { x: W / 2, title: "JEV DECISION", col: "#f59e0b" },
-    { x: W - 180, title: "ACTION OUT", col: "#22c55e" },
+    { x: W - 210, title: "ACTION OUT", col: "#22c55e" },
   ];
+  const NW = 210, NH = 118;
   // connector lines
   g.strokeStyle = "#22304d"; g.lineWidth = 2;
-  g.beginPath(); g.moveTo(nodes[0].x + 90, my); g.lineTo(nodes[1].x - 105, my); g.stroke();
-  g.beginPath(); g.moveTo(nodes[1].x + 105, my); g.lineTo(nodes[2].x - 90, my); g.stroke();
+  g.beginPath(); g.moveTo(nodes[0].x + NW / 2, my); g.lineTo(nodes[1].x - NW / 2 - 18, my); g.stroke();
+  g.beginPath(); g.moveTo(nodes[1].x + NW / 2 + 18, my); g.lineTo(nodes[2].x - NW / 2, my); g.stroke();
   // moving pulse dots (state -> jev -> action)
   if (flowPulse > 0.03) {
     const p = 1 - flowPulse;
     const seg = (a, b) => a + (b - a) * p;
-    [[nodes[0].x + 90, nodes[1].x - 105], [nodes[1].x + 105, nodes[2].x - 90]]
+    [[nodes[0].x + NW / 2, nodes[1].x - NW / 2 - 18],
+     [nodes[1].x + NW / 2 + 18, nodes[2].x - NW / 2]]
       .forEach(([a, b]) => {
         const x = seg(a, b);
         g.fillStyle = "#e2e8f0";
@@ -287,30 +319,36 @@ function drawFlow() {
   // nodes
   const snap = lastSnap, t = snap && snap.action;
   nodes.forEach((n, i) => {
-    const w = 180, h = 74, x = n.x - w / 2, y = my - h / 2;
+    const x = n.x - NW / 2, y = my - NH / 2;
     g.fillStyle = "#0d1526";
     g.strokeStyle = n.col; g.lineWidth = flowPulse > 0.4 && i === 1 ? 2.6 : 1.4;
     if (i === 1) { g.shadowColor = n.col; g.shadowBlur = flowPulse * 16; }
-    g.beginPath(); g.roundRect(x, y, w, h, 10); g.fill(); g.stroke();
+    g.beginPath(); g.roundRect(x, y, NW, NH, 10); g.fill(); g.stroke();
     g.shadowBlur = 0;
     g.fillStyle = n.col; g.font = "700 12px sans-serif"; g.textAlign = "center";
-    g.fillText(n.title, n.x, y + 22);
-    g.fillStyle = "#8ea0bf"; g.font = "11px ui-monospace,Consolas,monospace";
-    let sub = "waiting";
-    if (t) {
-      if (i === 0) sub = t.state.length + " dims  [" + t.state.slice(0, 2).join(", ") + (t.state.length > 2 ? ", ..." : "") + "]";
-      if (i === 1) {
-        const d = Object.fromEntries(t.answers.map(a => [a.name, a])).direction;
-        sub = d ? d.value + "  conf " + d.confidence : "-";
+    g.fillText(n.title, n.x, y + 18);
+    if (i === 0) drawMesh(g, x + 10, y + 26, NW - 20, NH - 38, stateHist, 8, 26);
+    if (i === 2) drawMesh(g, x + 10, y + 26, NW - 20, NH - 38, actionHist, 6, 26);
+    if (i === 1) {  // typed answer + probability bars
+      const d = t && Object.fromEntries(t.answers.map(a => [a.name, a])).direction;
+      g.fillStyle = "#e2e8f0"; g.font = "700 15px sans-serif";
+      g.fillText(d ? d.value : "-", n.x, y + 48);
+      if (d) {
+        const probs = Object.entries(d.probabilities || {}).slice(0, 4);
+        probs.forEach(([k, v], j) => {
+          const bw = NW - 44, bx = x + 22, by = y + 62 + j * 13;
+          g.fillStyle = "#1b2740"; g.fillRect(bx, by, bw, 7);
+          g.fillStyle = "#f59e0b";
+          g.fillRect(bx, by, bw * Math.min(1, v), 7);
+          g.fillStyle = "#8ea0bf"; g.font = "9px sans-serif"; g.textAlign = "left";
+          g.fillText(`${k} ${(v * 100).toFixed(0)}%`, bx + bw + 3, by + 6.5);
+          g.textAlign = "center";
+        });
       }
-      if (i === 2) sub = t.action.length > 24 ? t.action.slice(0, 23) + "]" : t.action;
-    }
-    g.fillText(sub, n.x, y + 46);
-    if (i === 1 && t) {  // engine tag under the brain node
       g.fillStyle = flowEngine === "laya" ? "#22c55e"
         : flowEngine === "jev" ? "#f59e0b" : "#93c5fd";
       g.font = "700 10px sans-serif";
-      g.fillText(flowEngine, n.x, y + 63);
+      g.fillText(flowEngine, n.x, y + NH - 6);
     }
   });
   requestAnimationFrame(drawFlow);
