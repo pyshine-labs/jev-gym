@@ -161,6 +161,9 @@ def list_envs() -> list[str]:
     hardcore_ready = os.path.isfile(".models/hardcore_final/best_model.zip")
     out = [eid for eid in out
            if not eid.startswith("BipedalWalkerHardcore") or hardcore_ready]
+    # Continuous lander has no passing policy and the lander law is tuned
+    # for the discrete action set: keep it out of the dropdown.
+    out = [eid for eid in out if not eid.startswith("LunarLanderContinuous")]
     return sorted(set(out)) or ["CartPole-v1"]
 
 
