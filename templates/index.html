@@ -356,7 +356,7 @@ function drawHBars(g, x, y, w, items, sc) {
     const t = Math.min(1, Math.max(0, it.t));
     g.fillStyle = it.color || "#f59e0b";
     g.fillRect(x, by + 14, w * t, 14);
-    g.fillStyle = "#e2e8f0"; g.font = `${7.5 * sc}px ui-monospace,Consolas,monospace`;
+    g.fillStyle = "#e2e8f0"; g.font = `${6.5 * sc}px ui-monospace,Consolas,monospace`;
     g.fillText(it.text, x + w + 6, by + 25);
   });
 }
@@ -428,7 +428,7 @@ function drawFlow() {
       drawVBars(g, x + 20, y + 132, 180, 136,
                 t && t.cstate ? t.cstate : null, cstateHist,
                 ["x", "xd", "th", "thd"], 4, 14);
-      drawHBars(g, x + 244, y + 136, 150, [
+      drawHBars(g, x + 244, y + 136, 112, [
         { label: "confidence", t: d ? d.confidence || 0 : 0,
           text: (d ? d.confidence || 0 : 0).toFixed(2), color: "#f59e0b" },
         { label: "at_risk", t: r ? Number(r.value) || 0 : 0,
