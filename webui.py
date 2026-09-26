@@ -452,7 +452,9 @@ def api_arch():
         motor = {"type": "physics control law", "trained": False,
                  "source": "hand-tuned rules per env family"}
     return jsonify({"encoder": encoder, "head": head, "motor": motor,
-                    "env": env, "engine": getattr(SESSION, "engine", None)})
+                    "env": env, "learned": sorted(LEARNED.keys()),
+                    "engine": getattr(getattr(SESSION, "engine", None),
+                                      "engine", None)})
 
 
 @app.route("/api/start", methods=["POST"])

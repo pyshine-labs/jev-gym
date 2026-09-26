@@ -586,7 +586,7 @@ function renderCharts() {
 let arch = null;
 function fetchArch() {
   fetch("/api/arch").then(r => r.json()).then(d => { arch = d; })
-    .catch(() => {});
+    .catch(e => console.warn("arch fetch failed", e));
 }
 fetchArch();
 setInterval(fetchArch, 4000);
@@ -650,13 +650,19 @@ function drawArch() {
   [["direction (choice)", "at_risk (noul)", "instability (score)"]]
     .forEach(nms => nms.forEach((nm, i) =>
       archBlock(g, 20 + i * 212, 236, 196, 38, nm, null, true, null)));
-  // right column: the motor layer
+  // right column: the motor layer (follows the env selected in the dropdown)
+  const env = ($("env") && $("env").value) || arch.env || "";
+  const isPPO = (arch.learned || []).includes(env);
+  const m = isPPO
+    ? { type: "PPO policy (MLP)", trained: true,
+        source: "learned per env - stable-baselines3 checkpoint" }
+    : { type: "physics control law", trained: false,
+        source: "hand-tuned rules per env family" };
   g.fillStyle = "#e2e8f0"; g.font = "700 13.5px sans-serif";
   g.fillText("motor layer - acts on the env", 680, 30);
-  const m = arch.motor || {};
-  archBlock(g, 680, 44, 540, 60, m.type || "-",
-    `${m.source || ""}${arch.env ? "   -   env: " + arch.env : ""}`,
-    !!m.trained, m.trained ? "TASK-TRAINED" : "RULE - FROZEN");
+  archBlock(g, 680, 44, 540, 60, m.type,
+    `${m.source}${env ? "   -   env: " + env : ""}`,
+    m.trained, m.trained ? "TASK-TRAINED" : "RULE - FROZEN");
   g.fillStyle = "#8ea0bf"; g.font = "11.5px sans-serif";
   g.fillText("Jev assesses every step; the motor layer selects the actual env action.",
              680, 122);
