@@ -294,7 +294,7 @@ function drawMatrix(g, x, y, w, h, current, history, labels, maxDims) {
     const cx = x + (d % cols) * cw, cy = y + Math.floor(d / cols) * ch;
     g.fillStyle = meshColor(t);
     g.fillRect(cx + 1, cy + 1, cw - 2, ch - 2);
-    g.fillStyle = "#0b1220";
+    g.fillStyle = "#e2e8f0";
     g.font = "700 7.5px ui-monospace,Consolas,monospace";
     g.textAlign = "center";
     g.fillText((labels[d] ?? "s" + d).slice(0, 6), cx + cw / 2, cy + ch / 2 - 1);
@@ -368,12 +368,12 @@ function drawFlow() {
       if (d) {
         const probs = Object.entries(d.probabilities || {}).slice(0, 4);
         probs.forEach(([k, v], j) => {
-          const bw = NW - 44, bx = x + 22, by = y + 62 + j * 13;
+          const bw = NW - 96, bx = x + 22, by = y + 62 + j * 13;
           g.fillStyle = "#1b2740"; g.fillRect(bx, by, bw, 7);
           g.fillStyle = "#f59e0b";
           g.fillRect(bx, by, bw * Math.min(1, v), 7);
           g.fillStyle = "#8ea0bf"; g.font = "9px sans-serif"; g.textAlign = "left";
-          g.fillText(`${k} ${(v * 100).toFixed(0)}%`, bx + bw + 3, by + 6.5);
+          g.fillText(`${k} ${(v * 100).toFixed(0)}%`, bx + bw + 4, by + 6.5);
           g.textAlign = "center";
         });
       }
