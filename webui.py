@@ -21,7 +21,9 @@ from gymnasium.spaces import Box, Discrete
 from PIL import Image
 
 from controller import decide as cartpole_decide
-from jev_agent import DEFAULT_QUESTIONS, LocalDecisionHead, make_engine
+from jev_agent import (AT_RISK, DEFAULT_QUESTIONS, DIRECTION, INSTABILITY,
+                       LANDER_QUESTIONS, LocalDecisionHead, SIDE_ENGINE,
+                       make_engine)
 
 app = Flask(__name__)
 
@@ -106,6 +108,8 @@ def policy_acrobot(obs) -> int:
 PENDULUM = dict(k_pump=0.1, k1=16.0, k2=4.0, th_sw=0.7, w_sw=2.0,
                 c=15.0, e_target=30.0)
 
+_CONTROL_HEAD = LocalDecisionHead()
+
 
 def policy_pendulum(obs, gains: dict = PENDULUM) -> float:
     """Swing-up by pumping energy to the upright level, then PD hold.
@@ -178,37 +182,50 @@ def frame_b64(env) -> str | None:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def policy_lander_jev(obs, to_right: bool) -> int:
-    """Jev drives the lateral decision: its direction answer picks the side
-    engine; the descent contract (suicide-burn bound) stays in the law."""
-    x, y, vx, vy, ang, vang, leg1, leg2 = (float(v) for v in obs[:8])
-    if leg1 or leg2:                      # touched ground: cut engines
-        return 0
-    want = float(np.clip(0.08 * x + 0.7 * vx, -0.35, 0.35))
-    if abs(want - ang) > 0.12:            # attitude correction needed:
-        return 3 if to_right else 1       # Jev's direction picks the engine
-    need = 0.3 * math.sqrt(max(y, 0.05))
-    if vy < -max(need, 0.05):
-        return 2                          # main engine
-    return 0
-
-
 def policy_pendulum_jev(obs, instability: float) -> float:
-    """Jev decides the mode via its typed instability score: drifting or
-    worse -> pump energy, calm -> PD hold. Torque sign from the energy
-    contract, magnitude clipped to the env's bound."""
+    """Jev drives: its typed instability score gates pump intensity, the PD
+    catch region always catches. Works on both scales (local 0..4 level or
+    laya's continuous score)."""
     c, s, w = (float(v) for v in obs[:3])
     th = math.atan2(s, c)
     energy = 0.5 * w * w + 15.0 * (1.0 + c)
-    if instability >= 2.5:                # wobbling+ (level or continuous) -> pump
-        u = 0.1 * (30.0 - energy) * w
-    else:                                 # calm -> hold
-        u = -16.0 * th - 4.0 * w
-    return float(np.clip(u, -2.0, 2.0))
+    if abs(th) < 0.7 and abs(w) < 2.0:    # catch region: PD always holds
+        return float(np.clip(-16.0 * th - 4.0 * w, -2.0, 2.0))
+    pump = 0.1 * (30.0 - energy) * w      # swing-up by energy pumping
+    if instability >= 2.5:                # Jev: unstable -> full pump
+        return float(np.clip(pump, -2.0, 2.0))
+    return float(np.clip(0.3 * pump, -2.0, 2.0))  # Jev: calm -> damped pump
+
+
+def control_answers(env_id, state, answers):
+    """Jev drives on control-grade answers.
+
+    Choice answers (direction, side_engine) are always control-decided by
+    the local Jev head - remote choice quality is not reliable enough to
+    drive, and a wrong left/right flip wrecks an episode. The remote
+    engine's instability score is a mode/intensity gate and drives at
+    conf >= 0.5. Remote answers still stand for assessment/display.
+    """
+    remote = [a for a in answers.values() if a.engine != "local"]
+    if not remote:
+        return answers
+    cstate = canonical_state(env_id, state)
+    questions = [DIRECTION, SIDE_ENGINE, AT_RISK, INSTABILITY]
+    local = _CONTROL_HEAD.ask(cstate, questions)
+    out = dict(answers)
+    for name, a in out.items():
+        if a.engine == "local":
+            continue
+        if name in ("direction", "side_engine") or a.confidence < 0.5:
+            out[name] = local[name]
+    return out
 
 
 def choose_action(env, env_id, state, answers, jev_drives: bool = False):
-    to_right = answers["direction"].value == "right"
+    if jev_drives:
+        answers = control_answers(env_id, state, answers)
+    to_right = answers["direction"].value == "right" \
+        if "direction" in answers else True
     obs = np.asarray(state, dtype=float).ravel()
     act = env.action_space
     if jev_drives:
@@ -223,11 +240,25 @@ def choose_action(env, env_id, state, answers, jev_drives: bool = False):
             if len(state) == 4 and act.n == 2:
                 return int(cartpole_decide(state, answers))  # Jev direction
             if env_id.startswith("MountainCar") and obs.size == 2:
+                v = float(obs[1])
+                if v != 0.0:
+                    to_right = v > 0     # momentum guard: v carries the energy
                 return 2 if to_right else 0          # pump by Jev direction
             if env_id.startswith("Acrobot"):
                 return 2 if to_right else 0          # pump by Jev direction
             if env_id.startswith("LunarLander"):
-                return policy_lander_jev(obs, to_right)
+                side = answers.get("side_engine")
+                x, y, vx, vy, ang, vang, leg1, leg2 = (
+                    float(v) for v in obs[:8])
+                if leg1 or leg2:                     # grounded: cut engines
+                    return 0
+                if side is not None and side.value in ("left-engine",
+                                                       "right-engine"):
+                    return 1 if side.value == "left-engine" else 3
+                need = 0.3 * math.sqrt(max(y, 0.05))
+                if vy < -max(need, 0.05):
+                    return 2                         # main engine
+                return 0
             return discrete_action(env_id, int(act.n), to_right)
         if isinstance(act, Box):
             if env_id.startswith("Pendulum"):
@@ -235,6 +266,10 @@ def choose_action(env, env_id, state, answers, jev_drives: bool = False):
                 return np.array([policy_pendulum_jev(obs, inst)],
                                 dtype=act.dtype)
             if env_id.startswith("MountainCar"):
+                if obs.size == 2:
+                    v = float(obs[1])
+                    if v != 0.0:
+                        to_right = v > 0  # momentum guard: v carries energy
                 return np.array([1.0 if to_right else -1.0], dtype=act.dtype)
             u = 1.0 if to_right else -1.0
             return np.clip(u, act.low, act.high).astype(act.dtype).reshape(
@@ -350,19 +385,24 @@ class Session:
     def _ask(self) -> None:
         if self.answers is None or self.steps % self.decimate == 0:
             t0 = time.perf_counter()
+            questions = (LANDER_QUESTIONS
+                         if self.env_id.startswith("LunarLander")
+                         else DEFAULT_QUESTIONS)
             self.answers = self.engine.ask(
-                canonical_state(self.env_id, self.state), DEFAULT_QUESTIONS)
+                canonical_state(self.env_id, self.state), questions)
             self.ask_calls += 1
             self.latencies.append(time.perf_counter() - t0)
 
     def _apply(self, action=None, state=None) -> None:
-        direction = self.answers["direction"]
-        self.engines[direction.engine] = self.engines.get(direction.engine, 0) + 1
+        primary = (self.answers.get("direction")
+                   or self.answers.get("side_engine")
+                   or next(iter(self.answers.values())))
+        self.engines[primary.engine] = self.engines.get(primary.engine, 0) + 1
         self.trail.append({
             "step": self.steps + 1,
             "answers": answers_json(self.answers),
-            "engine": direction.engine,
-            "conf": round(float(direction.confidence), 3),
+            "engine": primary.engine,
+            "conf": round(float(primary.confidence), 3),
             "state": state_list(state),
             "cstate": state_list(canonical_state(self.env_id, state)),
             "action": action_label(self.env_id, action),

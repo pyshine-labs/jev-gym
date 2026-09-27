@@ -96,7 +96,21 @@ INSTABILITY = Question(
     ["stable", "slightly off", "drifting", "wobbling", "about to fail"],
 )
 
+# Lander-flavoured lateral decision: which side engine should fire (the
+# descent/main-engine contract stays in the motor translation).
+SIDE_ENGINE = Question(
+    "side_engine",
+    "choice",
+    "Which side engine should fire right now to keep the lander level?",
+    {
+        "left-engine": "fire the left engine to rotate left",
+        "right-engine": "fire the right engine to rotate right",
+        "none": "attitude is fine; no side engine needed",
+    },
+)
+
 DEFAULT_QUESTIONS = [DIRECTION, AT_RISK, INSTABILITY]
+LANDER_QUESTIONS = [SIDE_ENGINE, AT_RISK, INSTABILITY]
 
 
 class LocalDecisionHead:
@@ -133,6 +147,28 @@ class LocalDecisionHead:
                     {"left": round(p_left, 4), "right": round(p_right, 4)},
                     max(p_left, p_right), self.engine,
                 )
+            elif q.qtype == "choice" and q.name == "side_engine":
+                # lander attitude error in the canonical frame
+                # [x, x_dot, theta, theta_dot] = [x, vx, ang, vang]:
+                # want = attitude setpoint with angular-velocity damping
+                want = min(max(0.08 * f["x"] + 0.7 * f["x_dot"]
+                               - 0.75 * f["theta_dot"], -0.35), 0.35)
+                err = want - f["theta"]
+                if err > 0.12:
+                    value, others = "left-engine", ["right-engine", "none"]
+                elif err < -0.12:
+                    value, others = "right-engine", ["left-engine", "none"]
+                else:
+                    value, others = "none", ["left-engine", "right-engine"]
+                decisiveness = min(abs(err) / 0.5, 1.0) if value != "none" \
+                    else 1.0 - min(abs(err) / 0.12, 1.0)
+                conf = 0.5 + 0.5 * decisiveness
+                p_val = 0.5 + 0.5 * decisiveness
+                probs = {value: round(p_val, 4)}
+                for o in others:
+                    probs[o] = round((1.0 - p_val) / 2.0, 4)
+                out[q.name] = Answer(q.name, "choice", value, probs, conf,
+                                     self.engine)
             elif q.qtype == "noul":
                 p = _sigmoid((f["risk"] - 0.55) * 9.0)
                 out[q.name] = Answer(
