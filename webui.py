@@ -282,6 +282,7 @@ class Session:
         self.truncated = False
         self.answers = None
         self.engines: dict[str, int] = {}
+        self.ask_calls = 0
         self.latencies: list[float] = []
         self.trail: list[dict] = []
 
@@ -293,6 +294,7 @@ class Session:
             t0 = time.perf_counter()
             self.answers = self.engine.ask(
                 canonical_state(self.env_id, self.state), DEFAULT_QUESTIONS)
+            self.ask_calls += 1
             self.latencies.append(time.perf_counter() - t0)
 
     def _apply(self, action=None, state=None) -> None:
@@ -382,6 +384,7 @@ class Session:
             "action": self.trail[-1] if self.trail else None,
             "trail": self.trail[-12:],
             "engines": self.engines,
+            "engine_calls": self.ask_calls,
             "avg_ms": round(1000 * sum(self.latencies) / len(self.latencies), 1)
                       if self.latencies else 0.0,
             "risk": round(float(risk), 3) if risk is not None else None,

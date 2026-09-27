@@ -688,8 +688,15 @@ function render(snap) {
   $("stMs").textContent = snap.avg_ms + " ms";
   $("stConf").textContent = snap.avg_conf;
   $("stRisk").textContent = snap.risk ?? "-";
-  $("stEngines").innerHTML = Object.entries(snap.engines || {})
+  const fin = snap.engines || {}, calls = snap.engine_calls || 0;
+  let engHtml = Object.entries(fin)
     .map(([k, v]) => badge(k) + " " + v).join(" &nbsp; ");
+  if (snap.engine && snap.engine !== "local" && calls > 0 &&
+      (fin[snap.engine] || 0) < calls * 0.05)
+    engHtml += ` &nbsp; <span class="k">${badge(snap.engine)} assessed ${calls}` +
+               ` - answers below min conf -&gt; local kept</span>`;
+  engHtml += ` &nbsp; <span class="k">motor: ${snap.policy === "PPO" ? "PPO policy" : "physics law"}</span>`;
+  $("stEngines").innerHTML = engHtml;
   if (snap.action) {
     const a = Object.fromEntries(snap.action.answers.map(x => [x.name, x]));
     renderCards(Object.values(a));
