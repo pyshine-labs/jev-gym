@@ -20,7 +20,7 @@ state [x, x_dot, theta, theta_dot]          motor layer
 ```
 
 - **Jev stack** — a ModernBERT encoder (28 layers, hidden 1024, 16 heads) with a task-trained `typed-decisions` answer head. The backbone is pre-trained and frozen; the typed head was fine-tuned to emit the typed JSON answers.
-- **Motor layer** — the part that acts on the env: a per-env learned PPO policy (LunarLander, BipedalWalker) or a hand-tuned physics law (CartPole, MountainCar, Acrobot, Pendulum). Jev assesses every step; the motor layer acts.
+- **Motor layer** — the part that acts on the env. With **Jev drives** on (default), the action follows Jev's typed answers every step: `direction` drives CartPole/MountainCar/Acrobot/Lander, `instability` gates Pendulum's pump-vs-hold; BipedalWalker keeps its learned PPO gait (6-D joint torques can't come from a left/right answer). Jev's direction answer is intentionally coarse — with Jev driving, several classic envs will fail episodes; switch **Jev drives** off to use the physics law / PPO motor directly (all 7 envs pass) while Jev still assesses every step.
 
 ## Engines
 
