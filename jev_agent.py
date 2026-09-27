@@ -241,7 +241,11 @@ class LayaBackend:
             if not isinstance(ans, dict):
                 continue
             value = self._extract(ans, q.qtype)
-            conf = float(ans.get("confidence", 0.0) or 0.0)
+            # answer_confidence (top answer probability) is the calibrated
+            # signal; some checkpoints ship `confidence` squashed by broken
+            # temperature calibration (always ~0.07 for choices).
+            conf = float(ans.get("answer_confidence")
+                         or ans.get("confidence") or 0.0)
             if value is None or conf < self.min_confidence:
                 continue  # keep local answer
             probs = ans.get("probabilities") or {}

@@ -178,16 +178,73 @@ def frame_b64(env) -> str | None:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def choose_action(env, env_id, state, answers):
+def policy_lander_jev(obs, to_right: bool) -> int:
+    """Jev drives the lateral decision: its direction answer picks the side
+    engine; the descent contract (suicide-burn bound) stays in the law."""
+    x, y, vx, vy, ang, vang, leg1, leg2 = (float(v) for v in obs[:8])
+    if leg1 or leg2:                      # touched ground: cut engines
+        return 0
+    want = float(np.clip(0.08 * x + 0.7 * vx, -0.35, 0.35))
+    if abs(want - ang) > 0.12:            # attitude correction needed:
+        return 3 if to_right else 1       # Jev's direction picks the engine
+    need = 0.3 * math.sqrt(max(y, 0.05))
+    if vy < -max(need, 0.05):
+        return 2                          # main engine
+    return 0
+
+
+def policy_pendulum_jev(obs, instability: float) -> float:
+    """Jev decides the mode via its typed instability score: drifting or
+    worse -> pump energy, calm -> PD hold. Torque sign from the energy
+    contract, magnitude clipped to the env's bound."""
+    c, s, w = (float(v) for v in obs[:3])
+    th = math.atan2(s, c)
+    energy = 0.5 * w * w + 15.0 * (1.0 + c)
+    if instability >= 2.5:                # wobbling+ (level or continuous) -> pump
+        u = 0.1 * (30.0 - energy) * w
+    else:                                 # calm -> hold
+        u = -16.0 * th - 4.0 * w
+    return float(np.clip(u, -2.0, 2.0))
+
+
+def choose_action(env, env_id, state, answers, jev_drives: bool = False):
+    to_right = answers["direction"].value == "right"
+    obs = np.asarray(state, dtype=float).ravel()
+    act = env.action_space
+    if jev_drives:
+        if env_id.startswith("BipedalWalker"):
+            learned = LEARNED.get(env_id)  # 6-D gait: only the learned motor
+            if learned is not None:
+                a, _ = learned.predict(np.asarray(state, dtype=np.float32),
+                                       deterministic=True)
+                a = np.asarray(a)
+                return int(a.item()) if a.ndim == 0 else a
+        if isinstance(act, Discrete):
+            if len(state) == 4 and act.n == 2:
+                return int(cartpole_decide(state, answers))  # Jev direction
+            if env_id.startswith("MountainCar") and obs.size == 2:
+                return 2 if to_right else 0          # pump by Jev direction
+            if env_id.startswith("Acrobot"):
+                return 2 if to_right else 0          # pump by Jev direction
+            if env_id.startswith("LunarLander"):
+                return policy_lander_jev(obs, to_right)
+            return discrete_action(env_id, int(act.n), to_right)
+        if isinstance(act, Box):
+            if env_id.startswith("Pendulum"):
+                inst = float(answers["instability"].value or 0.0)
+                return np.array([policy_pendulum_jev(obs, inst)],
+                                dtype=act.dtype)
+            if env_id.startswith("MountainCar"):
+                return np.array([1.0 if to_right else -1.0], dtype=act.dtype)
+            u = 1.0 if to_right else -1.0
+            return np.clip(u, act.low, act.high).astype(act.dtype).reshape(
+                act.shape)
     learned = LEARNED.get(env_id)
     if learned is not None:
         a, _ = learned.predict(np.asarray(state, dtype=np.float32),
                                deterministic=True)
         a = np.asarray(a)
         return int(a.item()) if a.ndim == 0 else a
-    act = env.action_space
-    to_right = answers["direction"].value == "right"
-    obs = np.asarray(state, dtype=float).ravel()
     if isinstance(act, Discrete):
         if env_id.startswith("MountainCar") and obs.size == 2:
             return policy_mountaincar(obs)
@@ -281,6 +338,7 @@ class Session:
         self.terminated = False
         self.truncated = False
         self.answers = None
+        self.jev_drives = bool(cfg.get("jev_drives", True))
         self.engines: dict[str, int] = {}
         self.ask_calls = 0
         self.latencies: list[float] = []
@@ -319,7 +377,7 @@ class Session:
             self._ask()
             pre_state = self.state
             action = choose_action(self.env, self.env_id, self.state,
-                                   self.answers)
+                                   self.answers, self.jev_drives)
             state, reward, term, trunc, _ = self.env.step(action)
             self.state = state
             self.reward += float(reward)
@@ -373,7 +431,8 @@ class Session:
             "frame": frame_b64(self.env),
             "env": self.env_id,
             "engine": self.engine.engine,
-            "policy": "PPO" if self.env_id in LEARNED else "rule",
+            "policy": "JEV" if self.jev_drives else
+                      ("PPO" if self.env_id in LEARNED else "rule"),
             "steps": self.steps,
             "reward": round(self.reward, 2),
             "done": done or self.terminated or self.truncated,
