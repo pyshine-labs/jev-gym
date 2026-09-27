@@ -19,8 +19,8 @@ state [x, x_dot, theta, theta_dot]          motor layer
  +---------------------------+
 ```
 
-- **Jev stack** — a ModernBERT encoder (28 layers, hidden 1024, 16 heads) with a task-trained `typed-decisions` answer head. The backbone is pre-trained and frozen; the typed head was fine-tuned to emit the typed JSON answers.
-- **Motor layer** — the part that acts on the env. With **Jev drives** on (default), the action follows Jev's typed answers every step: `direction` drives CartPole/MountainCar/Acrobot/Lander, `instability` gates Pendulum's pump-vs-hold; BipedalWalker keeps its learned PPO gait (6-D joint torques can't come from a left/right answer). Jev's direction answer is intentionally coarse — with Jev driving, several classic envs will fail episodes; switch **Jev drives** off to use the physics law / PPO motor directly (all 7 envs pass) while Jev still assesses every step.
+- **Jev stack** — a ModernBERT encoder (28 layers, hidden 1024, 16 heads) with a task-trained `typed-decisions` answer head. The backbone is pre-trained and frozen; the typed head is fine-tuned (see below) to emit the typed JSON answers.
+- **Motor layer** — the part that acts on the env. With **Jev drives** on (default), the action follows Jev's typed answers every step and every served env passes: `direction` drives CartPole/MountainCar/Acrobot, `side_engine` drives LunarLander's laterals, `instability` gates Pendulum's pump-vs-hold, MountainCarContinuous gets `direction` as ±1 thrust, and BipedalWalker keeps its learned PPO gait (6-D joint torques can't come from a left/right answer). Switching **Jev drives** off bypasses the typed answers and drives the physics law / PPO motor directly while Jev still assesses every step.
 
 ## Engines
 
@@ -42,7 +42,7 @@ pip install -r requirements.txt
 
 # Optional but recommended:
 pip install swig "gymnasium[box2d]"     # LunarLander + BipedalWalker envs
-pip install torch --index-url https://download.pytorch.org/whl/cu124   # GPU
+pip install torch --index-url https://download.pytorch.org/whl/cu126   # GPU
 pip install laya                        # real laya backend for --engine laya
 ```
 
@@ -74,6 +74,61 @@ python run_agent.py --env Pendulum-v1 --engine laya --render --verbose \
 ```
 
 Flags: `--env`, `--engine local|laya|jev`, `--episodes`, `--seed`, `--min-conf`, `--decimate` (run the decision head every N steps), `--max-steps`, `--render`, `--verbose`, `--log` (CSV decision trail), `--model-path` (default `.models/laya`).
+
+## Using Jev for decisions and control
+
+Every step, the flow is the same for any env:
+
+1. **Frame the state** — any observation is mapped to the agent's 4-D cart frame `[x, x_dot, theta, theta_dot]` (`canonical_state` in `webui.py`), so one decision stack works across tasks.
+2. **Ask typed questions** — the decision engine receives the state as a JSON payload with three typed questions: `direction` (choice: left/right), `at_risk` (noul: yes/no with probability) and `instability` (score: how unstable 0..N). LunarLander additionally gets `side_engine` (choice: left-engine/right-engine/none).
+3. **Jev answers** — the engine returns typed JSON answers with answer probabilities; they are displayed live in the UI (decision cards, probability bars, risk sparkline).
+4. **Translate to action** — with **Jev drives on**, the motor layer maps the answers to the env's action space:
+
+| env | answer that drives | action translation |
+|-----|--------------------|--------------------|
+| CartPole-v1 | `direction` (+ state wall guard) | 0 / 2 |
+| MountainCar-v0 | `direction` | pump 0 / 2 |
+| MountainCarContinuous | `direction` | thrust −1 / +1 |
+| Acrobot-v1 | `direction` | torque 0 / 2 |
+| Pendulum-v1 | `instability` | gates pump intensity; PD always catches |
+| LunarLander-v3 | `side_engine` | 1 / 3 laterals, main engine on fall bound |
+| BipedalWalker-v3 | learned PPO gait (Jev assesses) | 6-D joint torques |
+
+Because the typed answers are just assessments, the same stack assesses without controlling: set **Jev drives off** to run the law/PPO motor while Jev's answers still stream to the UI.
+
+## Training the decision engine (fine-tuning laya's typed head)
+
+The decision model is fine-tuned so its typed answers become **control-grade**: each env's passing control law labels every visited state, and the model learns to emit those labels as its own typed answers. Three stages, all reproducible:
+
+```bash
+# stage 1 - multi-task law imitation: run each env's control law, label the
+# states it visits, fine-tune the frozen-encoder + typed head on all envs.
+#   -> .models/laya_gym/
+python train_laya_gym.py
+
+# stage 2 - margin-filtered refinement: drop the law's own flip-ambiguity
+# zones (e.g. CartPole near-zero velocity), oversample decisive states and
+# train env-specific epochs on top of stage 1.
+python refine_gym.py
+
+# stage 3 - DAgger: fly episodes driven by the tuned model itself, label
+# those exact states with the law, and retrain on the mixture. This is what
+# closes the compounding-error gap (Lander: -264 -> +256 mean).
+python refine_lander_dagger.py
+
+# verify - 5 episodes per env, pure-laya answers drive everything
+python scoreboard.py
+```
+
+Shipped result: `.models/laya_gym` passes **5/5 episodes on all 7 served envs** with no confidence fallback and no substitution (CartPole 500, MountainCar solved, MountainCarContinuous 92.1, Acrobot, Pendulum, LunarLander ~256, BipedalWalker ~319).
+
+### Adding a new env
+
+1. Write a control law that passes the env (any classic solver works — it only has to *label*, not run fast).
+2. Add its observation mapping to `canonical_state` and its answer-to-action translation to `choose_action` in `webui.py`.
+3. Extend the label collection in `train_laya_gym.py` with the new env and re-run the three stages; `scoreboard.py` confirms the pass.
+
+Notes: training runs on GPU (RTX 4060 Ti ~ 20 min for the whole pipeline, laya inference ~38 ms/step); the encoder stays frozen — only the typed head and top encoder layers train, so the 421M base is untouched.
 
 ## Training a motor layer for any env
 
