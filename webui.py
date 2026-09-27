@@ -37,16 +37,21 @@ FAMILIES = ("CartPole", "MountainCar", "Acrobot", "Pendulum",
 
 # Learned (PPO) policies, optional. Where a trained checkpoint exists it
 # drives the motor action; the Jev typed questions still assess every step.
+# All checkpoint paths are anchored to this file's folder so the server
+# works regardless of the process working directory.
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+_M = lambda *parts: os.path.join(_ROOT, ".models", *parts)  # noqa: E731
+
 LEARNED: dict = {}
 try:
     from stable_baselines3 import PPO as _PPO
 
     for _eid, _paths in (
-        ("Pendulum-v1", (".models/pendulum_final/best_model",)),
-        ("LunarLander-v3", (".models/lander_final/best_model",)),
-        ("BipedalWalker-v3", (".models/walker_final/best_model",
-                              ".models/best3/best_model")),
-        ("BipedalWalkerHardcore-v3", (".models/hardcore_final/best_model",)),
+        ("Pendulum-v1", (_M("pendulum_final", "best_model"),)),
+        ("LunarLander-v3", (_M("lander_final", "best_model"),)),
+        ("BipedalWalker-v3", (_M("walker_final", "best_model"),
+                              _M("best3", "best_model"))),
+        ("BipedalWalkerHardcore-v3", (_M("hardcore_final", "best_model"),)),
     ):
         for _p in _paths:
             try:
@@ -143,7 +148,8 @@ def list_envs() -> list[str]:
     # Hardcore stays hidden until its learned policy passes; running it
     # untrained is a guaranteed failure. hardcore_final is only created
     # after a checkpoint passes the 300-seed sweep.
-    hardcore_ready = os.path.isfile(".models/hardcore_final/best_model.zip")
+    hardcore_ready = os.path.isfile(
+        _M("hardcore_final", "best_model.zip"))
     out = [eid for eid in out
            if not eid.startswith("BipedalWalkerHardcore") or hardcore_ready]
     # Continuous lander has no passing policy and the lander law is tuned
@@ -473,8 +479,7 @@ def api_arch():
     Encoder + typed-decisions head come from the laya checkpoint configs;
     the motor layer is the PPO checkpoint (trained) or the hand law.
     """
-    enc_cfg = _read_cfg(os.path.join(".models", "laya", "encoder",
-                                     "config.json"))
+    enc_cfg = _read_cfg(_M("laya", "encoder", "config.json"))
     types = enc_cfg.get("layer_types", [])
     encoder = {
         "layers": enc_cfg.get("num_hidden_layers", 0),
@@ -486,8 +491,8 @@ def api_arch():
         "vocab": enc_cfg.get("vocab_size"),
         "context": enc_cfg.get("max_position_embeddings"),
     } if enc_cfg else {}
-    head_cfg = _read_cfg(os.path.join(".models", "laya", "typed-decisions",
-                                      "encoder", "config.json"))
+    head_cfg = _read_cfg(_M("laya", "typed-decisions", "encoder",
+                            "config.json"))
     head = {"layers": head_cfg.get("num_hidden_layers", 0)} if head_cfg else {}
     env = SESSION.env_id if SESSION else None
     if env and env in LEARNED:
