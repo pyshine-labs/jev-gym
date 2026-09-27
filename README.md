@@ -35,7 +35,7 @@ Any engine that cannot answer falls back to the local head per question, so the 
 ## Installation
 
 ```bash
-git clone <this repo> && cd jev-gym
+git clone https://github.com/pyshine-labs/jev-gym.git && cd jev-gym
 python -m venv .venv
 .venv\Scripts\activate            # Linux/Mac: source .venv/bin/activate
 pip install -r requirements.txt
@@ -58,7 +58,7 @@ python _fetch_laya.py
 python webui.py            # http://127.0.0.1:7860
 ```
 
-Pick an environment (CartPole, MountainCar, Acrobot, Pendulum, LunarLander, BipedalWalker), an engine, min-confidence, seed and speed (steps/s), then press **START**. The UI shows:
+Pick an environment (CartPole, MountainCar, MountainCarContinuous, Acrobot, Pendulum, LunarLander, BipedalWalker), an engine, the **Jev drives** toggle, min-confidence, decimate, seed and speed (steps/s), then press **START**. The UI shows:
 
 - the env render and live status (step, reward, decision time, avg confidence, risk)
 - the **live pipeline**: state-in vertical bars, the Jev node (direction + confidence / at_risk / instability bars), action-out with an explanation of *why* that action was selected
@@ -68,12 +68,11 @@ Pick an environment (CartPole, MountainCar, Acrobot, Pendulum, LunarLander, Bipe
 ## Usage — CLI
 
 ```bash
-python run_agent.py --env CartPole-v1 --engine local --episodes 3
-python run_agent.py --env Pendulum-v1 --engine laya --render --verbose \
-                    --log trail.csv
+python run_agent.py --engine local --episodes 3
+python run_agent.py --engine laya --render --verbose --log trail.csv
 ```
 
-Flags: `--env`, `--engine local|laya|jev`, `--episodes`, `--seed`, `--min-conf`, `--decimate` (run the decision head every N steps), `--max-steps`, `--render`, `--verbose`, `--log` (CSV decision trail), `--model-path` (default `.models/laya`).
+`run_agent.py` runs CartPole-v1 (the agent's home task). Flags: `--engine local|laya|jev`, `--episodes`, `--seed`, `--min-conf`, `--decimate` (run the decision head every N steps), `--max-steps`, `--render`, `--verbose`, `--log` (CSV decision trail), `--model-path` (default `.models/laya`). For the other envs use the WebUI.
 
 ## Using Jev for decisions and control
 
@@ -86,7 +85,7 @@ Every step, the flow is the same for any env:
 
 | env | answer that drives | action translation |
 |-----|--------------------|--------------------|
-| CartPole-v1 | `direction` (+ state wall guard) | 0 / 2 |
+| CartPole-v1 | `direction` (+ state wall guard) | 0 / 1 |
 | MountainCar-v0 | `direction` | pump 0 / 2 |
 | MountainCarContinuous | `direction` | thrust −1 / +1 |
 | Acrobot-v1 | `direction` | torque 0 / 2 |
@@ -128,7 +127,7 @@ Shipped result: `.models/laya_gym` passes **5/5 episodes on all 7 served envs** 
 2. Add its observation mapping to `canonical_state` and its answer-to-action translation to `choose_action` in `webui.py`.
 3. Extend the label collection in `train_laya_gym.py` with the new env and re-run the three stages; `scoreboard.py` confirms the pass.
 
-Notes: training runs on GPU (RTX 4060 Ti ~ 20 min for the whole pipeline, laya inference ~38 ms/step); the encoder stays frozen — only the typed head and top encoder layers train, so the 421M base is untouched.
+Notes: training runs on GPU (the whole three-stage pipeline takes ~25-30 min on an RTX 4060 Ti; laya inference ~38 ms/step); the encoder stays frozen — only the typed head and top encoder layers train, so the 421M base is untouched.
 
 ## Training a motor layer for any env
 
@@ -146,28 +145,9 @@ Best checkpoints land in `.models/<tag>/best_model.zip`. To serve one in the Web
 
 ```bash
 python verify_all.py               # live episodes in every served env
-python _verify_seeds.py            # 300-seed sweep per env
+python _verify_seeds.py 300        # N-seed robustness sweep (default 5)
 python _sweep_ppo.py               # eval a PPO checkpoint across seeds
 ```
-
-## Fine-tuning the laya decision engine (typed answers)
-
-The decision model itself can be fine-tuned so its typed answers become
-control-grade: each env's passing control law labels every state, and laya
-learns to emit those labels as its own answers.
-
-```bash
-python train_laya_gym.py          # multi-task law imitation -> .models/laya_gym/
-python refine_gym.py              # stage 2: margin-filtered, env-specific epochs
-python refine_lander_dagger.py    # stage 3: DAgger - laya-driven flights, law labels
-python scoreboard.py              # 5-episode pure-laya pass/fail per env
-```
-
-With the tuned checkpoint the WebUI runs in pure-laya mode: laya's answers
-drive every motor action with no confidence fallback. The shipped
-`.models/laya_gym` passes 5/5 episodes on all 7 served envs (CartPole 500,
-MountainCar, MountainCarContinuous 92.1, Acrobot, Pendulum, LunarLander ~256,
-BipedalWalker ~319).
 
 ## Repo layout
 
