@@ -52,6 +52,10 @@ def canonical_state(env_id: str, obs) -> np.ndarray:
         return np.array([v[0], v[1], 0.0, 0.0])
     if env_id.startswith("LunarLander"):  # [x, y, vx, vy, angle, vang, ...]
         return np.array([v[0], v[2], v[4], v[5]])
+    if env_id.startswith("CarRacing"):
+        # driving vector [speed, safe_speed, steer_alpha, lateral, off]:
+        # lateral offset is the road position, steer alpha the "pole angle"
+        return np.array([v[3], v[0], v[2], 0.0])
     return np.zeros(4)  # BipedalWalker et al: neutral posture
 
 
@@ -163,10 +167,41 @@ ACRO_PUMP = Question(
     },
 )
 
+# CarRacing driving contract: the steering decision and the pedal decision.
+STEER = Question(
+    "steer",
+    "choice",
+    "A car drives on a winding race track. The nose must follow the road "
+    "ahead and hug the centerline. Which steering should it apply right now?",
+    {
+        "left": "steer left: the road bends left ahead or the car is right "
+                "of the centerline",
+        "straight": "hold straight: the nose is aligned with the road ahead",
+        "right": "steer right: the road bends right ahead or the car is "
+                 "left of the centerline",
+    },
+)
+
+THROTTLE = Question(
+    "throttle",
+    "choice",
+    "A car races on a winding track: fast on straights, slow before tight "
+    "corners, never off the road. Its speed and the corner-limited safe "
+    "speed are given. Which pedal should it press right now?",
+    {
+        "accelerate": "press the gas: the speed is below the safe speed for "
+                      "the road ahead",
+        "coast": "lift off: the speed matches the safe speed",
+        "brake": "brake: the speed is above the safe speed for the road "
+                 "ahead",
+    },
+)
+
 DEFAULT_QUESTIONS = [DIRECTION, AT_RISK, INSTABILITY]
 LANDER_QUESTIONS = [SIDE_ENGINE, AT_RISK, INSTABILITY]
 MC_QUESTIONS = [MC_PUMP, AT_RISK, INSTABILITY]
 ACRO_QUESTIONS = [ACRO_PUMP, AT_RISK, INSTABILITY]
+CAR_QUESTIONS = [STEER, THROTTLE, AT_RISK, INSTABILITY]
 
 
 def questions_for(env_id: str) -> list:
@@ -177,6 +212,8 @@ def questions_for(env_id: str) -> list:
         return MC_QUESTIONS
     if env_id.startswith("Acrobot"):
         return ACRO_QUESTIONS
+    if env_id.startswith("CarRacing"):
+        return CAR_QUESTIONS
     return DEFAULT_QUESTIONS
 
 
@@ -247,6 +284,47 @@ class LocalDecisionHead:
                 for o in others:
                     probs[o] = round((1.0 - p_val) / 2.0, 4)
                 out[q.name] = Answer(q.name, "choice", value, probs, conf,
+                                     self.engine)
+            elif q.qtype == "choice" and q.name == "steer":
+                # CarRacing: obs = [speed, safe_speed, heading_err, lat, off].
+                # Same gains as the passing pure-pursuit law (kst=1.8/2.2,
+                # klat=0.6/0.8): u > 0 means the nose must rotate left.
+                v = np.asarray(obs, dtype=float).ravel()
+                u = 2.0 * float(v[2]) + 0.7 * float(v[3])
+                if u > 0.06:
+                    value, others = "left", ["straight", "right"]
+                elif u < -0.06:
+                    value, others = "right", ["left", "straight"]
+                else:
+                    value, others = "straight", ["left", "right"]
+                decisiveness = min(abs(u) / 0.3, 1.0)
+                conf = 0.5 + 0.5 * decisiveness
+                p_val = 0.5 + 0.5 * decisiveness
+                probs = {value: round(p_val, 4)}
+                for o in others:
+                    probs[o] = round((1.0 - p_val) / 2.0, 4)
+                out[q.name] = Answer(q.name, q.qtype, value, probs, conf,
+                                     self.engine)
+            elif q.qtype == "choice" and q.name == "throttle":
+                # CarRacing: compare speed against the corner-limited safe
+                # speed; off the road means full commitment to get back.
+                v = np.asarray(obs, dtype=float).ravel()
+                speed, v_t = float(v[0]), float(v[1])
+                off = v.size >= 5 and bool(v[4] > 0.5)
+                if off or speed < v_t - 2.0:
+                    value, others = "accelerate", ["coast", "brake"]
+                elif speed > v_t + 2.0:
+                    value, others = "brake", ["accelerate", "coast"]
+                else:
+                    value, others = "coast", ["accelerate", "brake"]
+                decisiveness = 1.0 if off else \
+                    min(abs(speed - v_t) / 8.0, 1.0)
+                conf = 0.5 + 0.5 * decisiveness
+                p_val = 0.5 + 0.5 * decisiveness
+                probs = {value: round(p_val, 4)}
+                for o in others:
+                    probs[o] = round((1.0 - p_val) / 2.0, 4)
+                out[q.name] = Answer(q.name, q.qtype, value, probs, conf,
                                      self.engine)
             elif q.qtype == "noul":
                 p = _sigmoid((f["risk"] - 0.55) * 9.0)
@@ -343,6 +421,14 @@ class LayaBackend:
             return {"pole_angle_deg": round(
                         math.degrees(math.atan2(float(v[1]), float(v[0]))), 2),
                     "pole_rotation_deg_per_s": round(math.degrees(float(v[2])), 2)}
+        if env_id.startswith("CarRacing"):
+            # driving vector [speed, safe_speed, heading_err, lateral, off]
+            return {"speed": round(float(v[0]), 2),
+                    "safe_speed": round(float(v[1]), 2),
+                    "target_heading_error_deg": round(
+                        math.degrees(float(v[2])), 1),
+                    "lateral_offset": round(float(v[3]), 2),
+                    "off_road": bool(v[4] > 0.5)}
         c = canonical_state(env_id, v)  # BipedalWalker et al: neutral posture
         return {"cart_position": round(float(c[0]), 3),
                 "cart_velocity": round(float(c[1]), 3),

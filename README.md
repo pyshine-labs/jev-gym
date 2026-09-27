@@ -58,7 +58,7 @@ python _fetch_laya.py
 python webui.py            # http://127.0.0.1:7860
 ```
 
-Pick an environment (CartPole, MountainCar, MountainCarContinuous, Acrobot, Pendulum, LunarLander, BipedalWalker), an engine, the **Jev drives** toggle, min-confidence, decimate, seed and speed (steps/s), then press **START**. The UI shows:
+Pick an environment (CartPole, MountainCar, MountainCarContinuous, Acrobot, Pendulum, LunarLander, CarRacing, BipedalWalker), an engine, the **Jev drives** toggle, min-confidence, decimate, seed and speed (steps/s), then press **START**. The UI shows:
 
 - the env render and live status (step, reward, decision time, avg confidence, risk)
 - the **live pipeline**: state-in vertical bars, the Jev node (direction + confidence / at_risk / instability bars), action-out with an explanation of *why* that action was selected
@@ -79,7 +79,7 @@ python run_agent.py --engine laya --render --verbose --log trail.csv
 Every step, the flow is the same for any env:
 
 1. **Frame the state** — any observation is mapped to the agent's 4-D cart frame `[x, x_dot, theta, theta_dot]` (`canonical_state` in `webui.py`), so one decision stack works across tasks.
-2. **Ask typed questions** — the decision engine receives the state as a JSON payload with three typed questions: `direction` (choice: left/right), `at_risk` (noul: yes/no with probability) and `instability` (score: how unstable 0..N). LunarLander additionally gets `side_engine` (choice: left-engine/right-engine/none).
+2. **Ask typed questions** — the decision engine receives the state as a JSON payload with three typed questions: `direction` (choice: left/right), `at_risk` (noul: yes/no with probability) and `instability` (score: how unstable 0..N). LunarLander additionally gets `side_engine` (choice: left-engine/right-engine/none); CarRacing swaps `direction` for the driving pair `steer` (left/straight/right) + `throttle` (accelerate/coast/brake), asked on a 5-D driving feature vector instead of pixels.
 3. **Jev answers** — the engine returns typed JSON answers with answer probabilities; they are displayed live in the UI (decision cards, probability bars, risk sparkline).
 4. **Translate to action** — with **Jev drives on**, the motor layer maps the answers to the env's action space:
 
@@ -91,6 +91,7 @@ Every step, the flow is the same for any env:
 | Acrobot-v1 | `direction` | torque 0 / 2 |
 | Pendulum-v1 | `instability` | gates pump intensity; PD always catches |
 | LunarLander-v3 | `side_engine` | 1 / 3 laterals, main engine on fall bound |
+| CarRacing-v3 | `steer` + `throttle` | typed answer picks the maneuver, the pure-pursuit law supplies the magnitude |
 | BipedalWalker-v3 | learned PPO gait (Jev assesses) | 6-D joint torques |
 
 Because the typed answers are just assessments, the same stack assesses without controlling: set **Jev drives off** to run the law/PPO motor while Jev's answers still stream to the UI.
@@ -110,16 +111,18 @@ python train_laya_gym.py
 # train env-specific epochs on top of stage 1.
 python refine_gym.py
 
-# stage 3 - DAgger: fly episodes driven by the tuned model itself, label
+# stage 3 - DAgger: fly/drive episodes with the tuned model itself, label
 # those exact states with the law, and retrain on the mixture. This is what
 # closes the compounding-error gap (Lander: -264 -> +256 mean).
 python refine_lander_dagger.py
+python refine_car_dagger.py   # car: laya-driven laps incl. its mistakes,
+                              # plus replay of every other env
 
 # verify - 5 episodes per env, pure-laya answers drive everything
 python scoreboard.py
 ```
 
-Shipped result: `.models/laya_gym` passes **5/5 episodes on all 7 served envs** with no confidence fallback and no substitution (CartPole 500, MountainCar solved, MountainCarContinuous 92.1, Acrobot, Pendulum, LunarLander ~256, BipedalWalker ~319).
+Shipped result: `.models/laya_gym` passes **5/5 episodes on all 8 served envs** with no confidence fallback and no substitution (CartPole 500, MountainCar solved, MountainCarContinuous 92.1, Acrobot, Pendulum, LunarLander ~256, CarRacing ~430+ segment score, BipedalWalker ~319). Note: a full CarRacing-v3 lap is physically impossible within its 1000-step limit, so its pass bar is a strong on-road segment (score ≥ 300 of the law's own ~460-550).
 
 ### Adding a new env
 
@@ -168,6 +171,7 @@ _sweep_ppo.py       seed sweep for a PPO checkpoint
 train_laya_gym.py   fine-tune laya's typed answers on the control laws
 refine_gym.py       stage-2 margin-filtered refinement epochs
 refine_lander_dagger.py  stage-3 DAgger: laya-driven flights, law labels
+refine_car_dagger.py     stage-3 DAgger for CarRacing + all-env replay
 scoreboard.py       5-episode pure-laya pass/fail per served env
 run.sh / run.bat    quick launchers
 .models/            laya checkpoint + per-env PPO checkpoints (not committed)

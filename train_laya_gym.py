@@ -23,7 +23,8 @@ import gymnasium as gym
 from controller import decide as cartpole_decide
 from jev_agent import (DEFAULT_QUESTIONS, LocalDecisionHead, questions_for,
                        MC_QUESTIONS, ACRO_QUESTIONS, LANDER_QUESTIONS)
-from webui import policy_acrobot, policy_lander, policy_pendulum
+from webui import (policy_acrobot, policy_car, policy_lander,
+                   policy_pendulum, car_context, CAR)
 
 from laya import load
 from laya.common import collate_items
@@ -36,7 +37,7 @@ OUT = os.path.join(ROOT, ".models", "laya_gym")
 TRAIN_EPS, VAL_EPS = 5, 2
 CAP = {"CartPole-v1": 400, "Pendulum-v1": 400, "LunarLander-v3": 400,
        "MountainCar-v0": 250, "MountainCarContinuous-v0": 250,
-       "Acrobot-v1": 250}
+       "Acrobot-v1": 250, "CarRacing-v3": 1000}
 # the lander is the one env whose minority classes collapse; oversample it
 EPS_OVERRIDES = {"LunarLander-v3": 9}
 
@@ -113,6 +114,49 @@ LAW = {
     "LunarLander-v3": (policy_lander, labels_lander),
 }
 
+# CarRacing is collected separately: the passing law needs env access
+# (track geometry), and states are stored as the 5-D driving vector,
+# never the 27k pixel values.
+CAR_ID = "CarRacing-v3"
+
+
+def labels_car(c):
+    """The passing law's typed answers, from its own car_context dict."""
+    s = c["steer"]
+    steer = "left" if s < -0.05 else "right" if s > 0.05 else "straight"
+    if c["off"]:
+        gas, brake = (0.7 if c["speed"] < 10 else 0.3), 0.0
+    else:
+        gas = float(np.clip((c["v_t"] - c["speed"]) * CAR["kg"],
+                            0.0, CAR["gmax"]))
+        brake = float(np.clip((c["speed"] - c["v_t"]) * CAR["kb"], 0.0, 1.0))
+    deficit = abs(c["speed"] - c["v_t"]) / max(c["v_t"], 1.0)
+    inst = int(round(min(1.0, deficit) * 3)) + (1 if c["off"] else 0)
+    return {"steer": steer,
+            "throttle": "brake" if brake >= 0.15 else
+                        "accelerate" if gas >= 0.15 else "coast",
+            "at_risk": bool(c["off"]),
+            "instability": min(inst, 4)}
+
+
+def collect_car(eps, seed0):
+    """Law-driven episodes; states stored as the 5-D driving vector
+    [speed, safe_speed, alpha, lateral, off] with labels from the law."""
+    env = gym.make(CAR_ID)
+    out = []
+    for ep in range(eps):
+        env.reset(seed=seed0 + ep)
+        for t in range(CAP[CAR_ID]):
+            c = car_context(env)
+            out.append((np.array([c["speed"], c["v_t"], c["alpha"],
+                                  c["lat"], 1.0 if c["off"] else 0.0]),
+                        labels_car(c)))
+            _, r, term, trunc, _ = env.step(policy_car(env))
+            if term or trunc:
+                break
+    env.close()
+    return out
+
 
 def collect(env_id, eps, seed0):
     env = gym.make(env_id)
@@ -153,7 +197,7 @@ def build_rows(agent, samples):
 
     rows = []
     qsets = {}
-    for env_id in LAW:
+    for env_id in list(LAW) + [CAR_ID]:
         qs = questions_for(env_id)
         qsets[env_id] = (
             [q.name for q in qs],
@@ -183,7 +227,7 @@ def evaluate(agent, val_samples, batch=48):
     agent.model.eval()
     per_env = {}
     with torch.no_grad():
-        for env_id in LAW:
+        for env_id in list(LAW) + [CAR_ID]:
             qs = questions_for(env_id)
             primary = qs[0].name
             crit = qs[0].criteria
@@ -236,6 +280,10 @@ def main():
         val += [(env_id, o, l) for o, l in collect(env_id, VAL_EPS, 100)]
         print(f"  {env_id}: {sum(1 for t in train if t[0] == env_id)} train, "
               f"{sum(1 for t in val if t[0] == env_id)} val", flush=True)
+    train += [(CAR_ID, o, l) for o, l in collect_car(TRAIN_EPS, 0)]
+    val += [(CAR_ID, o, l) for o, l in collect_car(VAL_EPS, 100)]
+    print(f"  {CAR_ID}: {sum(1 for t in train if t[0] == CAR_ID)} train, "
+          f"{sum(1 for t in val if t[0] == CAR_ID)} val", flush=True)
 
     print("loading base checkpoint...", flush=True)
     agent = load(BASE, device="cuda")

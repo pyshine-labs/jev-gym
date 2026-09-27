@@ -31,9 +31,10 @@ SESSION: "Session | None" = None
 
 # Families with 1-D Box observations and rgb_array rendering. Toy-text envs
 # (integer observations) cannot answer numeric typed questions, so they are
-# not offered. CarRacing is excluded too: pixel observations.
+# not offered. CarRacing renders pixels, but the driving state (speed, safe
+# speed, heading error, lateral offset) comes from the Box2D world itself.
 FAMILIES = ("CartPole", "MountainCar", "Acrobot", "Pendulum",
-            "LunarLander", "BipedalWalker")
+            "LunarLander", "BipedalWalker", "CarRacing")
 
 # Learned (PPO) policies, optional. Where a trained checkpoint exists it
 # drives the motor action; the Jev typed questions still assess every step.
@@ -141,6 +142,139 @@ def policy_lander(obs, g: dict = LANDER) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# CarRacing-v3: pure-pursuit driving law over the Box2D world. The obs is
+# pixels, but the track centerline and car pose come from env.unwrapped, so
+# the driving state is fully observable. Driving feature vector (what the
+# decision engines see instead of pixels):
+#   [speed, safe_speed, heading_error_rad, lateral_offset, off_road]
+# ---------------------------------------------------------------------------
+
+# Pure-pursuit gains (best of the tuning sweep; seed scores 461.1 / 547.3).
+# A full v3 lap in 1000 steps is physically impossible, so "passing" here
+# = a strong on-road lap segment.
+CAR = dict(look=0.40, lmin=5, lmax=18, kpp=22, jrec=10,
+           vmax=55, alat=14, brk=25, kb=0.22, kg=0.6, gmax=0.9, off=8.0)
+CAR_PASS = 300.0  # no official solve score; ~2/3 of the law's own segment
+
+
+def _car_wrap(a: float) -> float:
+    return (a + math.pi) % (2 * math.pi) - math.pi
+
+
+def _car_track(env):
+    """(centerline points, unit segment directions, mean segment length)."""
+    track = env.unwrapped.track
+    cl = np.array([[t[2], t[3]] for t in track], dtype=float)
+    d = np.diff(cl, axis=0, append=cl[:1])
+    n = np.linalg.norm(d, axis=1, keepdims=True)
+    sd = d / np.maximum(n, 1e-6)
+    sl = float(np.linalg.norm(d, axis=1).mean())
+    return cl, sd, sl
+
+
+def car_context(env) -> dict:
+    """Pure-pursuit context for the car right now (the passing law's view)."""
+    cl, sd, sl = _car_track(env)
+    car = env.unwrapped.car
+    pos = np.array([car.hull.position[0], car.hull.position[1]])
+    ang = car.hull.angle
+    fang = ang + math.pi / 2.0            # forward = hull local +Y
+    vel = car.hull.linearVelocity
+    speed = math.hypot(vel[0], vel[1])
+    d = np.linalg.norm(cl - pos, axis=1)
+    i = int(np.argmin(d))
+    n = len(cl)
+    p = CAR
+    # steering alpha: angle to the speed-scaled lookahead point (pure pursuit)
+    L = int(np.clip(speed * p["look"], p["lmin"], p["lmax"]))
+    dx, dy = cl[(i + L) % n] - pos
+    alpha = _car_wrap(math.atan2(dy, dx) - fang)
+    kappa = 2.0 * math.sin(alpha) / max(math.hypot(dx, dy), 1.0)
+    steer = float(np.clip(-p["kpp"] * kappa, -1, 1))
+    # braking-aware corner-speed envelope over sliding windows; the window
+    # bend is the SUM of per-segment direction changes, so S-bends cannot
+    # cancel out and hide from the envelope (same math as _tune_car.py)
+    hd = np.arctan2(sd[:, 1], sd[:, 0])
+    turn = np.abs(_car_wrap(np.diff(hd, append=hd[:1])))
+    total = float(turn.sum())
+    cs = np.concatenate([[0.0], np.cumsum(turn)])
+    cse = np.concatenate([cs, cs[1:] + total])   # wrap the closed loop
+    v_t = p["vmax"]
+    W, B = 6, p["brk"]
+    for k in range(0, 48, 6):
+        a = float(cse[i + k + W] - cse[i + k])
+        if a > 0.05:
+            R = sl * W / a
+            vc = math.sqrt(p["alat"] * R)
+            v_t = min(v_t, math.sqrt(vc * vc + 2.0 * B * sl * k))
+    to = cl[i] - pos
+    lat = float(-math.sin(ang) * to[1] - math.cos(ang) * to[0]) \
+        / max(d[i], 0.5)
+    return dict(pos=pos, fang=fang, ang=ang, speed=speed, alpha=alpha,
+                steer=steer, lat=lat, v_t=v_t, off=bool(d[i] > p["off"]),
+                i=i, cl=cl, sd=sd, sl=sl, dist=d[i])
+
+
+def car_features(env) -> np.ndarray:
+    c = car_context(env)
+    return np.array([c["speed"], c["v_t"], c["alpha"], c["lat"],
+                     1.0 if c["off"] else 0.0])
+
+
+def policy_car(env) -> np.ndarray:
+    """The passing pure-pursuit law: [steer, gas, brake]."""
+    c = car_context(env)
+    p = CAR
+    if c["off"]:
+        # recovery: pure pursuit to a point ahead on the road; loop toward
+        # its side at full lock when it falls behind
+        cl = c["cl"]
+        j2 = (c["i"] + p["jrec"]) % len(cl)
+        dx, dy = cl[j2] - c["pos"]
+        alpha = _car_wrap(math.atan2(dy, dx) - c["fang"])
+        if abs(alpha) > 1.4:
+            steer = -math.copysign(1.0, alpha)
+        else:
+            kappa = 2.0 * math.sin(alpha) / max(math.hypot(dx, dy), 1.0)
+            steer = float(np.clip(-p["kpp"] * kappa, -1, 1))
+        gas = 0.7 if c["speed"] < 10 else 0.3
+        return np.array([steer, gas, 0.0], dtype=np.float32)
+    gas = float(np.clip((c["v_t"] - c["speed"]) * p["kg"], 0.0, p["gmax"]))
+    brake = float(np.clip((c["speed"] - c["v_t"]) * p["kb"], 0.0, 1.0))
+    return np.array([c["steer"], gas, brake], dtype=np.float32)
+
+
+def car_jev_action(env, answers) -> np.ndarray:
+    """Jev drives: the typed steer/throttle answers choose the maneuver,
+    the passing law supplies the magnitude (same pattern as Pendulum)."""
+    c = car_context(env)
+    p = CAR
+    steer_ans = answers.get("steer")
+    val = steer_ans.value if steer_ans is not None else None
+    # the law's steering demand: positive alpha/kappa = target to the left
+    mag = float(np.clip(abs(c["steer"]), 0.0, 1.0))
+    if val == "left":
+        steer = -mag if mag > 0.05 else 0.0
+    elif val == "right":
+        steer = mag if mag > 0.05 else 0.0
+    else:
+        steer = 0.0
+    thr_ans = answers.get("throttle")
+    tval = thr_ans.value if thr_ans is not None else None
+    if tval == "accelerate":
+        gas = float(np.clip((c["v_t"] - c["speed"]) * p["kg"], 0.15,
+                            p["gmax"]))
+        brake = 0.0
+    elif tval == "brake":
+        gas = 0.0
+        brake = float(np.clip((c["speed"] - c["v_t"]) * p["kb"], 0.15, 1.0))
+    else:                                  # coast: hold speed gently
+        gas = float(np.clip((c["v_t"] - c["speed"]) * p["kg"], 0.0, 0.2))
+        brake = 0.0
+    return np.array([steer, gas, brake], dtype=np.float32)
+
+
 def list_envs() -> list[str]:
     # gymnasium 1.3 removed render_modes from EnvSpec; registry only lists
     # envs whose packages import cleanly, so family matching is enough.
@@ -155,6 +289,9 @@ def list_envs() -> list[str]:
     # Continuous lander has no passing policy and the lander law is tuned
     # for the discrete action set: keep it out of the dropdown.
     out = [eid for eid in out if not eid.startswith("LunarLanderContinuous")]
+    # The CarRacing law + training target v3 (normalized reward scale).
+    out = [eid for eid in out
+           if not eid.startswith("CarRacing") or eid == "CarRacing-v3"]
     return sorted(set(out)) or ["CartPole-v1"]
 
 
@@ -197,6 +334,8 @@ def choose_action(env, env_id, state, answers, jev_drives: bool = False):
                                        deterministic=True)
                 a = np.asarray(a)
                 return int(a.item()) if a.ndim == 0 else a
+        if env_id.startswith("CarRacing"):
+            return car_jev_action(env, answers)
         if isinstance(act, Discrete):
             if len(state) == 4 and act.n == 2:
                 return int(cartpole_decide(state, answers))  # Jev direction
@@ -247,6 +386,8 @@ def choose_action(env, env_id, state, answers, jev_drives: bool = False):
     if isinstance(act, Box):
         if env_id.startswith("Pendulum"):
             return np.array([policy_pendulum(obs)], dtype=act.dtype)
+        if env_id.startswith("CarRacing"):
+            return policy_car(env)               # pure-pursuit driving law
         if env_id.startswith("MountainCar"):  # continuous: energy pumping
             return np.array([1.0 if obs[1] > 0 else -1.0], dtype=act.dtype)
         u = 1.0 if to_right else -1.0
@@ -271,6 +412,10 @@ def action_label(env_id: str, action) -> str:
             return ["no fire", "left engine", "main engine", "right engine"][n] \
                 if 0 <= n <= 3 else str(n)
         return str(n)
+    if env_id.startswith("CarRacing"):
+        s, g, b = (float(v) for v in np.asarray(action).ravel()[:3])
+        ped = f"gas {g:.2f}" if g >= b else f"brake {b:.2f}"
+        return f"steer {s:+.2f}, {ped}"
     vals = [round(float(v), 3) for v in np.asarray(action).ravel()]
     return "[" + ", ".join(map(str, vals)) + "]"
 
@@ -331,13 +476,21 @@ class Session:
         self.trail: list[dict] = []
 
         self._ask()
-        self._apply(state=self.state)
+        self._apply(state=self._disp_state())
+
+    def _disp_state(self):
+        """What the UI/trail should show as 'the state': raw obs, except
+        CarRacing where pixels are replaced by the driving feature vector."""
+        if self.env_id.startswith("CarRacing"):
+            return car_features(self.env)
+        return self.state
 
     def _ask(self) -> None:
         if self.answers is None or self.steps % self.decimate == 0:
             t0 = time.perf_counter()
+            ask_state = self._disp_state()
             self.answers = self.engine.ask(
-                self.env_id, self.state, questions_for(self.env_id))
+                self.env_id, ask_state, questions_for(self.env_id))
             self.ask_calls += 1
             self.latencies.append(time.perf_counter() - t0)
 
@@ -364,7 +517,7 @@ class Session:
             if self.terminated or self.truncated or self.steps >= self.max_steps:
                 return self.snapshot(done=True)
             self._ask()
-            pre_state = self.state
+            pre_state = self._disp_state()
             action = choose_action(self.env, self.env_id, self.state,
                                    self.answers, self.jev_drives)
             state, reward, term, trunc, _ = self.env.step(action)
@@ -387,6 +540,8 @@ class Session:
         if self.terminated:
             if eid.startswith("CartPole"):
                 return False, "pole fell"
+            if eid.startswith("CarRacing"):
+                return True, "completed the lap"
             if eid.startswith("LunarLander"):
                 ok = self.reward >= 200
                 return ok, ("landed successfully" if ok else
@@ -398,6 +553,12 @@ class Session:
             return True, "goal reached"
         if eid.startswith("CartPole"):
             return True, "survived the full episode"
+        if eid.startswith("CarRacing"):
+            ok = self.reward >= CAR_PASS
+            return ok, (f"strong lap segment, scored {self.reward:.0f}"
+                        if ok else
+                        f"time up, scored {self.reward:.0f} "
+                        f"(bar {CAR_PASS:.0f})")
         if eid.startswith("Pendulum"):
             ok = self.reward >= -400
             return ok, ("held upright all episode" if ok else

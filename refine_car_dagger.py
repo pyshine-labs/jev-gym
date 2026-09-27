@@ -1,11 +1,11 @@
-"""Stage-2 refinement: env-specific low-lr continuation from .models/laya_gym.
+"""Stage-3 CarRacing refinement with DAgger.
 
-CartPole: drop razor-thin ambiguity (|u| < 0.05, the law's own flip noise)
-and oversample decisive states (|u| > 0.3) so the balance law dominates.
-Lander: 24 episodes + margin-filter the deadband boundary (0.06..0.18).
-Other envs are validated each epoch to confirm nothing regressed.
+Collect CarRacing episodes driven by laya itself - the states it actually
+visits when driving, including the mistakes (off-road excursions, wrong-side
+steering) that law-only data never contains - label every step with the
+passing law, and fine-tune .models/laya_gym at low lr together with
+law-driven replay of every other env so nothing forgets.
 """
-import math
 import os
 import sys
 
@@ -17,76 +17,81 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+import gymnasium as gym
+
 import train_laya_gym as T
-from jev_agent import LayaBackend
+from jev_agent import LayaBackend, questions_for
+from webui import car_context, car_jev_action
 
 from laya import load
 from laya.common import collate_items
 
 OUT = os.path.join(T.ROOT, ".models", "laya_gym")
-EPOCHS, BS, LR, WARMUP = 4, 24, 2e-5, 50
-MARGIN_LANDER = (0.06, 0.18)
+EPOCHS, BS, LR, WARMUP = 3, 24, 1e-5, 40
+DAGGER_EPS, DAGGER_SEED0 = 10, 300
+
+# law-driven replay counts: keep every other env's decision boundary alive
+# while the car head learns (small: replay, not retrain)
+REPLAY = {"CartPole-v1": 10, "LunarLander-v3": 8, "Pendulum-v1": 3,
+          "MountainCar-v0": 3, "MountainCarContinuous-v0": 3,
+          "Acrobot-v1": 3}
 
 
-def cartpole_u(obs):
-    x, x_dot, theta, theta_dot = (float(v) for v in np.asarray(obs))
-    return (theta + 2.3 * theta_dot) + (0.05 * x + 0.4 * x_dot)
-
-
-def refine_cartpole(samples):
-    kept, dropped, dup = [], 0, 0
-    for env_id, obs, labels in samples:
-        u = cartpole_u(obs)
-        if abs(u) < 0.05:
-            dropped += 1
-            continue
-        kept.append((env_id, obs, labels))
-        if abs(u) > 0.3:
-            kept.append((env_id, obs, labels))
-            dup += 1
-    print(f"cartpole refine: kept {len(kept)} (oversampled {dup}), "
-          f"dropped {dropped} razor-band", flush=True)
-    return kept
-
-
-def refine_lander(samples):
-    kept, dropped = [], 0
-    for env_id, obs, labels in samples:
-        x, y, vx, vy, ang, vang = (float(v) for v in np.asarray(obs)[:6])
-        want = min(max(0.08 * x + 0.7 * vx - 0.75 * vang, -0.35), 0.35)
-        err = want - ang
-        if MARGIN_LANDER[0] < abs(err) < MARGIN_LANDER[1]:
-            dropped += 1
-            continue
-        kept.append((env_id, obs, labels))
-    print(f"lander refine: kept {len(kept)}, dropped {dropped} ambiguous",
-          flush=True)
-    return kept
+def collect_laya_car(backend, eps, seed0):
+    """Episodes driven by laya through the exact pure-laya WebUI mapping;
+    every visited state labeled by the passing law (DAgger)."""
+    env = gym.make(T.CAR_ID)
+    out, scores = [], []
+    agent = backend.agent
+    agent.model.eval()
+    with torch.no_grad():
+        for ep in range(eps):
+            env.reset(seed=seed0 + ep)
+            total = 0.0
+            for t in range(T.CAP[T.CAR_ID]):
+                c = car_context(env)
+                obs5 = np.array([c["speed"], c["v_t"], c["alpha"],
+                                 c["lat"], 1.0 if c["off"] else 0.0])
+                answers = backend.ask(T.CAR_ID, obs5,
+                                      questions_for(T.CAR_ID))
+                out.append((T.CAR_ID, obs5, T.labels_car(c)))
+                _, r, term, trunc, _ = env.step(car_jev_action(env, answers))
+                total += float(r)
+                if term or trunc:
+                    break
+            scores.append(round(total, 1))
+    env.close()
+    agent.model.train()
+    return out, scores
 
 
 def main():
     torch.manual_seed(0)
     T.LAYA_PAYLOAD = LayaBackend.build_payload
 
-    print("collecting refinement data...", flush=True)
-    train = [("CartPole-v1", o, l)
-             for o, l in T.collect("CartPole-v1", 20, 0)]
-    train += [("LunarLander-v3", o, l)
-              for o, l in T.collect("LunarLander-v3", 24, 0)]
-    train = refine_cartpole([s for s in train if s[0] == "CartPole-v1"]) + \
-        refine_lander([s for s in train if s[0] == "LunarLander-v3"])
-    # replay the car law unfiltered so stage 2 does not erode it
-    train += [("CarRacing-v3", o, l) for o, l in T.collect_car(2, 0)]
-    val = []
-    for env_id in T.LAW:
-        val += [(env_id, o, l)
-                for o, l in T.collect(env_id, T.VAL_EPS, 100)]
-    val += [("CarRacing-v3", o, l) for o, l in T.collect_car(T.VAL_EPS, 100)]
-
     print("loading laya_gym ...", flush=True)
     agent = load(OUT, device="cuda")
-    model, tok = agent.model, agent.tok
+    backend = LayaBackend()
+    backend.agent = agent          # drive with the training weights
 
+    print("collecting DAgger episodes (laya-driven car)...", flush=True)
+    dagger, laya_scores = collect_laya_car(backend, DAGGER_EPS, DAGGER_SEED0)
+    offs = sum(1 for _, _, l in dagger if l["at_risk"])
+    print(f"car DAgger: {len(dagger)} states, {offs} off-road "
+          f"({offs / max(len(dagger), 1):.1%}); laya-driven scores "
+          f"{laya_scores}", flush=True)
+
+    print("collecting law replay...", flush=True)
+    train = [("CarRacing-v3", o, l) for o, l in T.collect_car(3, 0)]
+    for env_id, eps in REPLAY.items():
+        train += [(env_id, o, l) for o, l in T.collect(env_id, eps, 0)]
+    train = dagger + train
+    val = []
+    for env_id in T.LAW:
+        val += [(env_id, o, l) for o, l in T.collect(env_id, T.VAL_EPS, 100)]
+    val += [("CarRacing-v3", o, l) for o, l in T.collect_car(T.VAL_EPS, 100)]
+
+    model, tok = agent.model, agent.tok
     for name, p in model.named_parameters():
         top_layer = name.startswith("encoder.layers.") and \
             int(name.split(".")[2]) >= 22

@@ -10,10 +10,11 @@ import numpy as np
 import gymnasium as gym
 
 from jev_agent import make_engine, questions_for
-from webui import choose_action, LEARNED
+from webui import choose_action, car_features, LEARNED
 
 ENVS = ["CartPole-v1", "MountainCar-v0", "MountainCarContinuous-v0",
-        "Acrobot-v1", "Pendulum-v1", "LunarLander-v3", "BipedalWalker-v3"]
+        "Acrobot-v1", "Pendulum-v1", "LunarLander-v3", "CarRacing-v3",
+        "BipedalWalker-v3"]
 
 
 def run(env_id, engine, seed):
@@ -21,7 +22,10 @@ def run(env_id, engine, seed):
     obs, _ = env.reset(seed=seed)
     total, steps, done = 0.0, 0, False
     while not done:
-        answers = engine.ask(env_id, obs, questions_for(env_id))
+        # CarRacing pixels are useless to the engines: ask on the driving
+        # feature vector (same as the WebUI's ask state)
+        state = car_features(env) if env_id.startswith("CarRacing") else obs
+        answers = engine.ask(env_id, state, questions_for(env_id))
         action = choose_action(env, env_id, obs, answers, jev_drives=True)
         obs, r, term, trunc, _ = env.step(action)
         total += float(r)
