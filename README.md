@@ -1,5 +1,7 @@
 # jev-gym
 
+> A [pyshine.com](https://pyshine.com) project.
+
 A **System-One decision agent (Jev)** that controls any [gymnasium](https://gymnasium.farama.org/) environment. At every step the agent answers three typed questions about the state — `direction` (choice), `at_risk` (noul) and `instability` (score) — and a motor layer turns that assessment into the actual env action. A Flask WebUI shows the live pipeline: state in, typed decision, action out, reward curve and the model architecture.
 
 ## How it works
@@ -112,3 +114,7 @@ _sweep_ppo.py       seed sweep for a PPO checkpoint
 run.sh / run.bat    quick launchers
 .models/            laya checkpoint + per-env PPO checkpoints (not committed)
 ```
+
+---
+
+**pyshine.com** — more write-ups, demos and projects at [pyshine.com](https://pyshine.com).
