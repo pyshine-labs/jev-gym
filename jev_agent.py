@@ -277,13 +277,12 @@ class LayaBackend:
             if not isinstance(ans, dict):
                 continue
             value = self._extract(ans, q.qtype)
+            if value is None:
+                continue  # unparseable -> structural fallback to local
             # answer_confidence (top answer probability) is the calibrated
-            # signal; some checkpoints ship `confidence` squashed by broken
-            # temperature calibration (always ~0.07 for choices).
+            # signal; kept unconditionally - laya wins on its own.
             conf = float(ans.get("answer_confidence")
                          or ans.get("confidence") or 0.0)
-            if value is None or conf < self.min_confidence:
-                continue  # keep local answer
             probs = ans.get("probabilities") or {}
             local[q.name] = Answer(q.name, q.qtype, value, probs, conf, "laya")
         return local

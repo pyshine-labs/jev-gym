@@ -21,9 +21,7 @@ from gymnasium.spaces import Box, Discrete
 from PIL import Image
 
 from controller import decide as cartpole_decide
-from jev_agent import (AT_RISK, DEFAULT_QUESTIONS, DIRECTION, INSTABILITY,
-                       LANDER_QUESTIONS, LocalDecisionHead, SIDE_ENGINE,
-                       make_engine)
+from jev_agent import DEFAULT_QUESTIONS, LANDER_QUESTIONS, make_engine
 
 app = Flask(__name__)
 
@@ -107,8 +105,6 @@ def policy_acrobot(obs) -> int:
 
 PENDULUM = dict(k_pump=0.1, k1=16.0, k2=4.0, th_sw=0.7, w_sw=2.0,
                 c=15.0, e_target=30.0)
-
-_CONTROL_HEAD = LocalDecisionHead()
 
 
 def policy_pendulum(obs, gains: dict = PENDULUM) -> float:
@@ -197,33 +193,7 @@ def policy_pendulum_jev(obs, instability: float) -> float:
     return float(np.clip(0.3 * pump, -2.0, 2.0))  # Jev: calm -> damped pump
 
 
-def control_answers(env_id, state, answers):
-    """Jev drives on control-grade answers.
-
-    Choice answers (direction, side_engine) are always control-decided by
-    the local Jev head - remote choice quality is not reliable enough to
-    drive, and a wrong left/right flip wrecks an episode. The remote
-    engine's instability score is a mode/intensity gate and drives at
-    conf >= 0.5. Remote answers still stand for assessment/display.
-    """
-    remote = [a for a in answers.values() if a.engine != "local"]
-    if not remote:
-        return answers
-    cstate = canonical_state(env_id, state)
-    questions = [DIRECTION, SIDE_ENGINE, AT_RISK, INSTABILITY]
-    local = _CONTROL_HEAD.ask(cstate, questions)
-    out = dict(answers)
-    for name, a in out.items():
-        if a.engine == "local":
-            continue
-        if name in ("direction", "side_engine") or a.confidence < 0.5:
-            out[name] = local[name]
-    return out
-
-
 def choose_action(env, env_id, state, answers, jev_drives: bool = False):
-    if jev_drives:
-        answers = control_answers(env_id, state, answers)
     to_right = answers["direction"].value == "right" \
         if "direction" in answers else True
     obs = np.asarray(state, dtype=float).ravel()
@@ -240,9 +210,6 @@ def choose_action(env, env_id, state, answers, jev_drives: bool = False):
             if len(state) == 4 and act.n == 2:
                 return int(cartpole_decide(state, answers))  # Jev direction
             if env_id.startswith("MountainCar") and obs.size == 2:
-                v = float(obs[1])
-                if v != 0.0:
-                    to_right = v > 0     # momentum guard: v carries the energy
                 return 2 if to_right else 0          # pump by Jev direction
             if env_id.startswith("Acrobot"):
                 return 2 if to_right else 0          # pump by Jev direction
@@ -266,10 +233,6 @@ def choose_action(env, env_id, state, answers, jev_drives: bool = False):
                 return np.array([policy_pendulum_jev(obs, inst)],
                                 dtype=act.dtype)
             if env_id.startswith("MountainCar"):
-                if obs.size == 2:
-                    v = float(obs[1])
-                    if v != 0.0:
-                        to_right = v > 0  # momentum guard: v carries energy
                 return np.array([1.0 if to_right else -1.0], dtype=act.dtype)
             u = 1.0 if to_right else -1.0
             return np.clip(u, act.low, act.high).astype(act.dtype).reshape(
