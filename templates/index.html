@@ -699,7 +699,10 @@ function render(snap) {
   $("stRisk").textContent = snap.risk ?? "-";
   const fin = snap.engines || {}, calls = snap.engine_calls || 0;
   let engHtml = Object.entries(fin)
-    .map(([k, v]) => badge(k) + " " + v).join(" &nbsp; ");
+    .map(([k, v]) => k === "local" && snap.engine && snap.engine !== "local"
+         ? `<span class="k">local kept ${v} (answers below min conf)</span>`
+         : badge(k) + " " + v)
+    .join(" &nbsp; ");
   if (snap.engine && snap.engine !== "local" && calls > 0 &&
       (fin[snap.engine] || 0) < calls * 0.05)
     engHtml += ` &nbsp; <span class="k">${badge(snap.engine)} assessed ${calls}` +
