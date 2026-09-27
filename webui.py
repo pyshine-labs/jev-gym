@@ -21,7 +21,8 @@ from gymnasium.spaces import Box, Discrete
 from PIL import Image
 
 from controller import decide as cartpole_decide
-from jev_agent import DEFAULT_QUESTIONS, LANDER_QUESTIONS, make_engine
+from jev_agent import (canonical_state, make_engine, questions_for)
+
 
 app = Flask(__name__)
 
@@ -55,23 +56,6 @@ try:
                 pass
 except ImportError:  # stable-baselines3 not installed: rule laws only
     pass
-
-
-def canonical_state(env_id: str, obs) -> np.ndarray:
-    """Map any supported observation to the agent's 4-D cart frame
-    [x, x_dot, theta, theta_dot]."""
-    v = np.asarray(obs, dtype=float).ravel()
-    if env_id.startswith("CartPole"):
-        return v
-    if env_id.startswith("Pendulum"):
-        return np.array([0.0, 0.0, math.atan2(v[1], v[0]), v[2]])
-    if env_id.startswith("Acrobot"):  # [cos1, sin1, cos2, sin2, v1, v2]
-        return np.array([0.0, 0.0, math.atan2(v[3], v[2]), v[5]])
-    if env_id.startswith("MountainCar"):  # [position, velocity]
-        return np.array([v[0], v[1], 0.0, 0.0])
-    if env_id.startswith("LunarLander"):  # [x, y, vx, vy, angle, vang, ...]
-        return np.array([v[0], v[2], v[4], v[5]])
-    return np.zeros(4)  # BipedalWalker et al: neutral posture
 
 
 def discrete_action(env_id: str, n: int, to_right: bool) -> int:
@@ -194,8 +178,9 @@ def policy_pendulum_jev(obs, instability: float) -> float:
 
 
 def choose_action(env, env_id, state, answers, jev_drives: bool = False):
-    to_right = answers["direction"].value == "right" \
-        if "direction" in answers else True
+    choice = answers.get("direction") or answers.get("pump")
+    to_right = choice.value == "right" or choice.value == "pos" \
+        if choice is not None else True
     obs = np.asarray(state, dtype=float).ravel()
     act = env.action_space
     if jev_drives:
@@ -302,10 +287,7 @@ def action_value(action):
 
 def answers_json(answers) -> list:
     out = []
-    for q in DEFAULT_QUESTIONS:
-        a = answers.get(q.name)
-        if a is None:
-            continue
+    for a in answers.values():
         out.append({
             "name": a.name, "qtype": a.qtype,
             "value": str(a.value), "confidence": round(float(a.confidence), 3),
@@ -348,16 +330,14 @@ class Session:
     def _ask(self) -> None:
         if self.answers is None or self.steps % self.decimate == 0:
             t0 = time.perf_counter()
-            questions = (LANDER_QUESTIONS
-                         if self.env_id.startswith("LunarLander")
-                         else DEFAULT_QUESTIONS)
             self.answers = self.engine.ask(
-                canonical_state(self.env_id, self.state), questions)
+                self.env_id, self.state, questions_for(self.env_id))
             self.ask_calls += 1
             self.latencies.append(time.perf_counter() - t0)
 
     def _apply(self, action=None, state=None) -> None:
         primary = (self.answers.get("direction")
+                   or self.answers.get("pump")
                    or self.answers.get("side_engine")
                    or next(iter(self.answers.values())))
         self.engines[primary.engine] = self.engines.get(primary.engine, 0) + 1

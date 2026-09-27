@@ -19,7 +19,7 @@ import time
 import gymnasium as gym
 
 from controller import decide
-from jev_agent import DEFAULT_QUESTIONS, make_engine
+from jev_agent import DEFAULT_QUESTIONS, make_engine, questions_for
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,7 +80,8 @@ def main() -> None:
         while not done and steps < args.max_steps:
             if steps % args.decimate == 0:
                 t0 = time.perf_counter()
-                answers = engine.ask(state, DEFAULT_QUESTIONS)
+                answers = engine.ask("CartPole-v1", state,
+                                     questions_for("CartPole-v1"))
                 latency.append(time.perf_counter() - t0)
             # else: hold the answers from the last ask (--decimate N)
 

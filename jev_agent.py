@@ -38,6 +38,23 @@ X_LIMIT = 2.4          # meters
 THETA_DOT_LIMIT = 2.0  # rad/s, soft reference scale
 
 
+def canonical_state(env_id: str, obs) -> np.ndarray:
+    """Map any supported observation to the agent's 4-D cart frame
+    [x, x_dot, theta, theta_dot]."""
+    v = np.asarray(obs, dtype=float).ravel()
+    if env_id.startswith("CartPole"):
+        return v
+    if env_id.startswith("Pendulum"):
+        return np.array([0.0, 0.0, math.atan2(v[1], v[0]), v[2]])
+    if env_id.startswith("Acrobot"):  # [cos1, sin1, cos2, sin2, v1, v2]
+        return np.array([0.0, 0.0, math.atan2(v[3], v[2]), v[5]])
+    if env_id.startswith("MountainCar"):  # [position, velocity]
+        return np.array([v[0], v[1], 0.0, 0.0])
+    if env_id.startswith("LunarLander"):  # [x, y, vx, vy, angle, vang, ...]
+        return np.array([v[0], v[2], v[4], v[5]])
+    return np.zeros(4)  # BipedalWalker et al: neutral posture
+
+
 def _sigmoid(v: float) -> float:
     if v >= 0:
         z = math.exp(-min(v, 60.0))
@@ -101,16 +118,66 @@ INSTABILITY = Question(
 SIDE_ENGINE = Question(
     "side_engine",
     "choice",
-    "Which side engine should fire right now to keep the lander level?",
+    "A lunar lander descends toward its pad and must stay level. The left "
+    "engine rotates it counterclockwise (its angle increases); the right "
+    "engine rotates it clockwise (angle decreases). Fire a side engine only "
+    "to correct tilt or drift. Which side engine should fire right now?",
     {
-        "left-engine": "fire the left engine to rotate left",
-        "right-engine": "fire the right engine to rotate right",
-        "none": "attitude is fine; no side engine needed",
+        "left-engine": "fire the left engine: the lander must rotate "
+                       "counterclockwise (angle should increase)",
+        "right-engine": "fire the right engine: the lander must rotate "
+                        "clockwise (angle should decrease)",
+        "none": "the lander is level enough; no side engine",
+    },
+)
+
+# MountainCar / MountainCarContinuous momentum pump: accelerate with the
+# motion to build energy for the hill climb.
+MC_PUMP = Question(
+    "pump",
+    "choice",
+    "A car sits in a valley between two hills and must reach the flag at "
+    "the top of the right hill. It cannot climb directly; it must swing "
+    "back and forth, always accelerating in the direction it is currently "
+    "moving, to build momentum. Which way should it accelerate right now?",
+    {
+        "left": "accelerate left: the car is moving left (velocity negative)",
+        "right": "accelerate right: the car is moving right (velocity positive)",
+    },
+)
+
+# Acrobot energy pump: torque with the elbow swing.
+ACRO_PUMP = Question(
+    "pump",
+    "choice",
+    "A two-link acrobot hangs downward and must swing its tip up to a line "
+    "by pumping energy through its hip torque. Apply the torque in the same "
+    "direction the lower link is currently swinging; when the lower link is "
+    "nearly still, follow the upper link's swing. Which torque should fire "
+    "right now?",
+    {
+        "neg": "torque -1: the elbow swings in the negative direction "
+               "(elbow_velocity negative)",
+        "pos": "torque +1: the elbow swings in the positive direction "
+               "(elbow_velocity positive)",
     },
 )
 
 DEFAULT_QUESTIONS = [DIRECTION, AT_RISK, INSTABILITY]
 LANDER_QUESTIONS = [SIDE_ENGINE, AT_RISK, INSTABILITY]
+MC_QUESTIONS = [MC_PUMP, AT_RISK, INSTABILITY]
+ACRO_QUESTIONS = [ACRO_PUMP, AT_RISK, INSTABILITY]
+
+
+def questions_for(env_id: str) -> list:
+    """The typed question set matching each env family's control contract."""
+    if env_id.startswith("LunarLander"):
+        return LANDER_QUESTIONS
+    if env_id.startswith("MountainCar"):
+        return MC_QUESTIONS
+    if env_id.startswith("Acrobot"):
+        return ACRO_QUESTIONS
+    return DEFAULT_QUESTIONS
 
 
 class LocalDecisionHead:
@@ -133,11 +200,23 @@ class LocalDecisionHead:
             "risk": min(max(risk, 0.0), 1.0),
         }
 
-    def ask(self, state, questions) -> dict:
+    def ask(self, env_id, obs, questions) -> dict:
+        state = canonical_state(env_id, obs)
         f = self.features(state)  # the single shared pass
         out = {}
         for q in questions:
-            if q.qtype == "choice" and q.name == "direction":
+            if q.qtype == "choice" and q.name == "pump":
+                v = np.asarray(obs, dtype=float).ravel()
+                if env_id.startswith("Acrobot"):
+                    # pump with the elbow swing; follow the shoulder when stalled
+                    v2, v1 = float(v[5]), float(v[4])
+                    drive = v1 if abs(v2) < 0.05 else v2
+                    value = "pos" if drive > 0 else "neg"
+                else:  # MountainCar: accelerate with the motion
+                    value = "right" if float(v[1]) > 0 else "left"
+                out[q.name] = Answer(q.name, q.qtype, value,
+                                     {value: 0.9}, 0.9, self.engine)
+            elif q.qtype == "choice" and q.name == "direction":
                 u = f["lean"] + f["align"]
                 p_right = _sigmoid(6.0 * u)
                 p_left = 1.0 - p_right
@@ -197,11 +276,11 @@ class LocalDecisionHead:
 class LayaBackend:
     """The open Jev-compatible decision model (`pip install laya`).
 
-    Prefers a local checkpoint at .models/laya/ (fetched with
-    _fetch_laya.py, no network needed at runtime); otherwise uses the
-    `laya` Router with its default Hugging Face checkpoints. Every
-    question is tried against laya; on any error, or when laya's
-    confidence is below `min_confidence`, the local head's answer is used.
+    Prefers the task-tuned checkpoint at .models/laya_gym/ (fine-tuned on
+    each env's passing control law by train_laya_gym.py) so laya's own
+    answers are control-grade; otherwise falls back to the base checkpoint
+    at .models/laya/. Every question is tried against laya; only an
+    unparseable answer falls back structurally to the local head.
     """
 
     engine = "laya"
@@ -210,10 +289,12 @@ class LayaBackend:
                  model_path: str | None = None):
         self.min_confidence = min_confidence
         self.fallback = LocalDecisionHead()
+        root = os.path.dirname(os.path.abspath(__file__))
+        tuned = os.path.join(root, ".models", "laya_gym")
+        base = model_path or os.path.join(root, ".models", "laya")
         try:
-            local = model_path or os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                ".models", "laya")
+            tuned_ok = os.path.isfile(os.path.join(tuned, "model.safetensors"))
+            local = tuned if (tuned_ok and not model_path) else base
             if os.path.isdir(local):
                 from laya import load  # type: ignore
 
@@ -237,6 +318,37 @@ class LayaBackend:
                 f"laya engine unavailable ({exc}). Install with: pip install laya"
             ) from exc
 
+    @staticmethod
+    def build_payload(env_id: str, obs) -> dict:
+        """Per-env state payload with human-readable physics keys. The
+        task-tuned checkpoint is trained on exactly this serialization."""
+        v = np.asarray(obs, dtype=float).ravel()
+        if env_id.startswith("CartPole"):
+            return {"cart_position": round(float(v[0]), 3),
+                    "cart_velocity": round(float(v[1]), 3),
+                    "pole_angle_deg": round(math.degrees(float(v[2])), 2),
+                    "pole_rotation_deg_per_s": round(math.degrees(float(v[3])), 2)}
+        if env_id.startswith("MountainCar"):
+            return {"position": round(float(v[0]), 3),
+                    "velocity": round(float(v[1]), 3)}
+        if env_id.startswith("Acrobot"):
+            return {"shoulder_velocity": round(float(v[4]), 3),
+                    "elbow_velocity": round(float(v[5]), 3)}
+        if env_id.startswith("LunarLander"):
+            return {"x": round(float(v[0]), 3), "y": round(float(v[1]), 3),
+                    "vx": round(float(v[2]), 3), "vy": round(float(v[3]), 3),
+                    "angle_deg": round(math.degrees(float(v[4])), 2),
+                    "angular_velocity": round(float(v[5]), 3)}
+        if env_id.startswith("Pendulum"):
+            return {"pole_angle_deg": round(
+                        math.degrees(math.atan2(float(v[1]), float(v[0]))), 2),
+                    "pole_rotation_deg_per_s": round(math.degrees(float(v[2])), 2)}
+        c = canonical_state(env_id, v)  # BipedalWalker et al: neutral posture
+        return {"cart_position": round(float(c[0]), 3),
+                "cart_velocity": round(float(c[1]), 3),
+                "pole_angle_deg": round(math.degrees(float(c[2])), 2),
+                "pole_rotation_deg_per_s": round(math.degrees(float(c[3])), 2)}
+
     def _extract(self, ans: dict, qtype: str):
         for key in (qtype, "value"):
             if isinstance(ans, dict) and key in ans:
@@ -249,13 +361,10 @@ class LayaBackend:
                     return v
         return None
 
-    def ask(self, state, questions) -> dict:
+    def ask(self, env_id, obs, questions) -> dict:
         names = [q.name for q in questions]
-        laya_state = {
-            "x": float(state[0]), "x_dot": float(state[1]),
-            "theta": float(state[2]), "theta_dot": float(state[3]),
-        }
-        local = self.fallback.ask(state, questions)
+        laya_state = self.build_payload(env_id, obs)
+        local = self.fallback.ask(env_id, obs, questions)
         qpayload = {
             q.name: {"type": q.qtype, "instructions": q.instructions,
                      **({"criteria": q.criteria} if q.criteria else {})}
@@ -311,8 +420,9 @@ class JevBackend:
                 "OPENROUTER_API_KEY environment variable."
             )
 
-    def ask(self, state, questions) -> dict:
-        local = self.fallback.ask(state, questions)
+    def ask(self, env_id, obs, questions) -> dict:
+        state = canonical_state(env_id, obs)
+        local = self.fallback.ask(env_id, obs, questions)
         payload = {
             "model": self.model,
             "state": {

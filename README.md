@@ -95,6 +95,25 @@ python _verify_seeds.py            # 300-seed sweep per env
 python _sweep_ppo.py               # eval a PPO checkpoint across seeds
 ```
 
+## Fine-tuning the laya decision engine (typed answers)
+
+The decision model itself can be fine-tuned so its typed answers become
+control-grade: each env's passing control law labels every state, and laya
+learns to emit those labels as its own answers.
+
+```bash
+python train_laya_gym.py          # multi-task law imitation -> .models/laya_gym/
+python refine_gym.py              # stage 2: margin-filtered, env-specific epochs
+python refine_lander_dagger.py    # stage 3: DAgger - laya-driven flights, law labels
+python scoreboard.py              # 5-episode pure-laya pass/fail per env
+```
+
+With the tuned checkpoint the WebUI runs in pure-laya mode: laya's answers
+drive every motor action with no confidence fallback. The shipped
+`.models/laya_gym` passes 5/5 episodes on all 7 served envs (CartPole 500,
+MountainCar, MountainCarContinuous 92.1, Acrobot, Pendulum, LunarLander ~256,
+BipedalWalker ~319).
+
 ## Repo layout
 
 ```
@@ -111,6 +130,10 @@ _train_ppo2.py      second training config
 _fetch_laya.py      resumable laya checkpoint download
 _verify_seeds.py    300-seed robustness sweep
 _sweep_ppo.py       seed sweep for a PPO checkpoint
+train_laya_gym.py   fine-tune laya's typed answers on the control laws
+refine_gym.py       stage-2 margin-filtered refinement epochs
+refine_lander_dagger.py  stage-3 DAgger: laya-driven flights, law labels
+scoreboard.py       5-episode pure-laya pass/fail per served env
 run.sh / run.bat    quick launchers
 .models/            laya checkpoint + per-env PPO checkpoints (not committed)
 ```
